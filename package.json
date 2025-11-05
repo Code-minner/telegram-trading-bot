@@ -7,9 +7,9 @@
     "build": "tsc",
     "start": "node dist/index.js"
   },
-  "engines": {
-    "node": "18.x"
-  },
+ "engines": {
+  "node": "22.x"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",

@@ -1,4 +1,4 @@
-// bot/handlers/messages.ts - UPDATED WITH CEX SUPPORT
+// bot/handlers/messages.ts - UPDATED WITH CEX AND WALLET SUPPORT
 import { Context, Markup } from 'telegraf';
 import { dexService } from '../../services/dexService';
 import * as userService from '../../services/userService';
@@ -7,6 +7,7 @@ import * as riskManager from '../../utils/riskManager';
 import { handleTokenAddressMessage } from '../features/tokenDisplay';
 import { userStates } from './callbacks';
 import { processCustomAmount } from './cexHandlers';
+import { handleWalletTextInput } from './walletHandlers';
 
 export async function handleTextMessage(ctx: Context) {
   if (!ctx.from || !('text' in ctx.message!)) return;
@@ -14,7 +15,11 @@ export async function handleTextMessage(ctx: Context) {
   const userId = ctx.from.id;
   const text = ctx.message.text;
 
-  // Check for CEX custom amount input FIRST
+  // Check for wallet operations FIRST (import wallet, name wallet)
+  const handledWallet = await handleWalletTextInput(ctx, text, userId);
+  if (handledWallet) return;
+
+  // Check for CEX custom amount input
   const handledCustom = await processCustomAmount(ctx, text, userId);
   if (handledCustom) return;
 

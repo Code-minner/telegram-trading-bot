@@ -1716,7 +1716,7 @@ export async function handleCallback(ctx: Context) {
   const userId = ctx.from.id;
 
   try {
-    // Wallet callbacks FIRST
+    // Wallet callbacks FIRST - must be before answerCbQuery for proper flow
     if (handleWalletCallbacks(ctx)) {
       return;
     }
@@ -1772,6 +1772,13 @@ export async function handleCallback(ctx: Context) {
     // Connect
     if (data === "menu_connect") return handleConnectMenu(ctx);
     if (data === "help_api_keys") return handleHelpApiKeys(ctx);
+    if (data === "help_connect") return handleHelpApiKeys(ctx);
+
+    // Wallets menu
+    if (data === "menu_wallets") {
+      const { handleWalletCommand } = require('./walletHandlers');
+      return handleWalletCommand(ctx);
+    }
 
     // Coming soon features
     if (data === "menu_limit") return handleComingSoon(ctx, "Limit Orders");

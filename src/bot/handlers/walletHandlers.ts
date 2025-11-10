@@ -1,590 +1,623 @@
-// src/bot/handlers/walletHandlers.ts
+// bot/handlers/walletHandlers.ts - FIXED WALLET IMPORT
 import { Context, Markup } from 'telegraf';
-import { 
-  generateAndSaveWallet, 
-  getUserWallets, 
-  getPrimaryWallet,
-  saveWallet,
-  setPrimaryWallet,
-  deleteWallet,
-  getWalletsWithBalances,
-  getDecryptedPrivateKey
-} from '../../services/walletService';
-import { dexService } from '../../services/dexService';
+import * as userService from '../../services/userService';
 
-// Handle /wallet command
+// Import wallet service
+let walletService: any;
+try {
+  walletService = require('../../services/walletService');
+} catch (e) {
+  console.log('Wallet service not available');
+}
+
+// User states for wallet operations
+export const walletStates = new Map<number, any>();
+
+/**
+ * Main wallet command handler
+ */
 export async function handleWalletCommand(ctx: Context) {
-  try {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
+  if (!ctx.from) return;
 
-    const wallets = await getUserWallets(telegramId);
-    
-    if (wallets.length === 0) {
+  const userId = ctx.from.id;
+
+  try {
+    // Check if wallet service is available
+    if (!walletService) {
       await ctx.reply(
-        '👛 *Wallet Management*\n\n' +
-        'You don\'t have any wallets yet.\n\n' +
-        '✨ Generate a new Solana wallet\n' +
-        '📥 Import your existing wallet\n' +
-        '💎 Start trading memecoins!\n\n' +
-        '🔐 All wallets are encrypted & secure',
+        `🔧 *Wallet Feature*\n\n` +
+        `Multi-wallet management coming soon!\n\n` +
+        `Current: Single wallet via /connect`,
         {
           parse_mode: 'Markdown',
           ...Markup.inlineKeyboard([
-            [
-              Markup.button.callback('✨ Generate New Wallet', 'wallet_generate'),
-              Markup.button.callback('📥 Import Wallet', 'wallet_import')
-            ],
-            [
-              Markup.button.callback('« Back', 'back_main')
-            ]
+            [Markup.button.callback('🪙 Memecoins', 'menu_memecoins')],
+            [Markup.button.callback('🏠 Main Menu', 'back_main')]
           ])
         }
       );
       return;
     }
 
-    // Show existing wallets
-    let message = '👛 *Your Wallets*\n\n';
-    let totalBalance = 0;
+    const wallets = await walletService.getUserWallets(userId);
+    
+    let message = `💼 *Wallet Manager*\n\n`;
+    
+    if (wallets.length === 0) {
+      message += `No wallets connected.\n\n`;
+      message += `Create or import a wallet to get started!`;
+    } else {
+      const totalBalance = wallets.reduce((sum: number, w: any) => sum + (w.balance || 0), 0);
+      message += `💰 Total: ${totalBalance.toFixed(4)} SOL\n`;
+      message += `💼 Wallets: ${wallets.length}\n\n`;
 
-    for (const wallet of wallets) {
-      const isPrimary = wallet.is_primary ? '⭐ ' : '';
-      const shortAddress = `${wallet.public_key.slice(0, 6)}...${wallet.public_key.slice(-4)}`;
-      const balance = wallet.balance || 0;
-      totalBalance += balance;
-      
-      message += `${isPrimary}*${wallet.wallet_name}*\n`;
-      message += `🔑 \`${shortAddress}\`\n`;
-      message += `💰 ${balance.toFixed(4)} SOL\n\n`;
+      for (const wallet of wallets.slice(0, 5)) {
+        const isPrimary = wallet.is_primary ? '⭐' : '';
+        message += `${isPrimary} *${wallet.wallet_name}*\n`;
+        message += `💰 ${(wallet.balance || 0).toFixed(4)} SOL\n`;
+        message += `📍 ${wallet.public_key?.slice(0, 4)}...${wallet.public_key?.slice(-4)}\n\n`;
+      }
     }
-
-    message += `━━━━━━━━━━━━━━━━━━\n`;
-    message += `💎 *Total:* ${totalBalance.toFixed(4)} SOL\n\n`;
-    message += '💡 _Tap wallet to view details_';
-
-    const buttons = wallets.map(w => [
-      Markup.button.callback(
-        `${w.is_primary ? '⭐ ' : ''}${w.wallet_name}`,
-        `wallet_view_${w.id}`
-      )
-    ]);
-
-    buttons.push(
-      [
-        Markup.button.callback('✨ Generate New', 'wallet_generate'),
-        Markup.button.callback('📥 Import', 'wallet_import')
-      ],
-      [
-        Markup.button.callback('🔄 Refresh Balances', 'wallet_refresh')
-      ],
-      [
-        Markup.button.callback('« Back', 'back_main')
-      ]
-    );
 
     await ctx.reply(message, {
       parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard(buttons)
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('➕ Create New', 'wallet_create'),
+          Markup.button.callback('📥 Import', 'wallet_import')
+        ],
+        [
+          Markup.button.callback('🔄 Refresh', 'wallet_refresh'),
+          Markup.button.callback('⚙️ Manage', 'wallet_manage')
+        ],
+        [Markup.button.callback('🏠 Main Menu', 'back_main')]
+      ])
     });
 
-  } catch (error) {
-    console.error('Error in handleWalletCommand:', error);
-    await ctx.reply('❌ Failed to load wallets. Please try again.');
+  } catch (error: any) {
+    console.error('Wallet command error:', error);
+    await ctx.reply('❌ Error loading wallets. Try again.');
   }
 }
 
-// Generate new wallet
-export async function handleGenerateWallet(ctx: Context) {
-  try {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
+/**
+ * Handle wallet callbacks
+ */
+export function handleWalletCallbacks(ctx: Context): boolean {
+  if (!('data' in ctx.callbackQuery!) || !ctx.from) return false;
 
-    await ctx.answerCbQuery();
-    
-    // Edit or send new message based on context
-    const loadingMessage = '⏳ Generating new Solana wallet...';
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(loadingMessage);
-    } else {
-      await ctx.reply(loadingMessage);
-    }
+  const data = ctx.callbackQuery.data;
+  const userId = ctx.from.id;
 
-    // Check how many wallets user has
-    const existingWallets = await getUserWallets(telegramId);
-    const isPrimary = existingWallets.length === 0; // First wallet is primary
-    const walletName = existingWallets.length === 0 
-      ? 'Main Wallet' 
-      : `Wallet ${existingWallets.length + 1}`;
-
-    // Generate wallet
-    const wallet = await generateAndSaveWallet(telegramId, walletName, isPrimary);
-
-    const successMessage =
-      '✅ *Wallet Created Successfully!*\n\n' +
-      `🏷️ *Name:* ${wallet.wallet_name}\n` +
-      `🔑 *Address:*\n\`${wallet.public_key}\`\n\n` +
-      `${isPrimary ? '⭐ Set as primary wallet\n\n' : ''}` +
-      '⚠️ *IMPORTANT:*\n' +
-      '• Your wallet is encrypted and stored securely\n' +
-      '• Export & backup your private key\n' +
-      '• Send SOL to start trading!\n\n' +
-      '💡 _Tap address to copy_';
-
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(successMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('💰 View Balance', `wallet_balance_${wallet.id}`),
-            Markup.button.callback('📤 Export Key', `wallet_export_${wallet.id}`)
-          ],
-          [
-            Markup.button.callback('🔄 Refresh', 'wallet_refresh'),
-            Markup.button.callback('👛 My Wallets', 'menu_wallets')
-          ],
-          [
-            Markup.button.callback('« Back', 'back_main')
-          ]
-        ])
-      });
-    } else {
-      await ctx.reply(successMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('💰 View Balance', `wallet_balance_${wallet.id}`),
-            Markup.button.callback('📤 Export Key', `wallet_export_${wallet.id}`)
-          ],
-          [
-            Markup.button.callback('🔄 Refresh', 'wallet_refresh'),
-            Markup.button.callback('👛 My Wallets', 'menu_wallets')
-          ],
-          [
-            Markup.button.callback('« Back', 'back_main')
-          ]
-        ])
-      });
-    }
-
-  } catch (error) {
-    console.error('Error generating wallet:', error);
-    await ctx.reply('❌ Failed to generate wallet. Please try again.');
+  // Wallet menu
+  if (data === 'menu_wallets') {
+    handleWalletCommand(ctx);
+    return true;
   }
+
+  // Create wallet
+  if (data === 'wallet_create') {
+    handleCreateWallet(ctx);
+    return true;
+  }
+
+  // Import wallet
+  if (data === 'wallet_import') {
+    handleImportWallet(ctx);
+    return true;
+  }
+
+  // Refresh wallets
+  if (data === 'wallet_refresh') {
+    handleWalletCommand(ctx);
+    return true;
+  }
+
+  // Manage wallets
+  if (data === 'wallet_manage') {
+    handleManageWallets(ctx);
+    return true;
+  }
+
+  // Select wallet
+  if (data.startsWith('select_wallet_')) {
+    const walletId = data.replace('select_wallet_', '');
+    handleSelectWallet(ctx, walletId);
+    return true;
+  }
+
+  // Set primary wallet
+  if (data.startsWith('set_primary_')) {
+    const walletId = data.replace('set_primary_', '');
+    handleSetPrimary(ctx, walletId);
+    return true;
+  }
+
+  // Delete wallet
+  if (data.startsWith('delete_wallet_')) {
+    const walletId = data.replace('delete_wallet_', '');
+    handleDeleteWallet(ctx, walletId);
+    return true;
+  }
+
+  // Confirm delete
+  if (data.startsWith('confirm_delete_')) {
+    const walletId = data.replace('confirm_delete_', '');
+    handleConfirmDelete(ctx, walletId);
+    return true;
+  }
+
+  return false;
 }
 
-// Import existing wallet
-export async function handleImportWallet(ctx: Context) {
-  try {
-    await ctx.answerCbQuery();
-    
-    const importMessage =
-      '📥 *Import Existing Wallet*\n\n' +
-      '🔐 Send me your Solana wallet private key\n\n' +
-      '⚠️ *Security Notes:*\n' +
-      '• Keys are encrypted before storage\n' +
-      '• Delete message after importing\n' +
-      '• Only import wallets you own\n\n' +
-      '💡 *Format:* Base58 private key\n' +
-      '💡 *Example:* 5JK8... (long string)';
+/**
+ * Handle text messages for wallet operations
+ */
+export async function handleWalletTextInput(ctx: Context, text: string, userId: number): Promise<boolean> {
+  const state = walletStates.get(userId);
+  
+  if (!state) return false;
 
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(importMessage, {
+  try {
+    // Import wallet
+    if (state.action === 'import_wallet') {
+      await processWalletImport(ctx, text, userId);
+      return true;
+    }
+
+    // Name new wallet
+    if (state.action === 'name_wallet') {
+      await processWalletName(ctx, text, userId, state.privateKey);
+      return true;
+    }
+
+  } catch (error: any) {
+    console.error('Wallet text input error:', error);
+    await ctx.reply(`❌ Error: ${error.message}`);
+    walletStates.delete(userId);
+  }
+
+  return false;
+}
+
+/**
+ * Create new wallet
+ */
+async function handleCreateWallet(ctx: Context) {
+  if (!ctx.from) return;
+
+  await ctx.answerCbQuery();
+  await ctx.editMessageText('⏳ *Creating Wallet...*', {
+    parse_mode: 'Markdown'
+  });
+
+  try {
+    if (!walletService) {
+      throw new Error('Wallet service not available');
+    }
+
+    const { Keypair } = await import('@solana/web3.js');
+    const bs58 = await import('bs58');
+
+    // Generate new keypair
+    const keypair = Keypair.generate();
+    const privateKey = bs58.default.encode(keypair.secretKey);
+    const publicKey = keypair.publicKey.toString();
+
+    // Set state to name the wallet
+    walletStates.set(ctx.from.id, {
+      action: 'name_wallet',
+      privateKey: privateKey
+    });
+
+    await ctx.editMessageText(
+      `✅ *Wallet Created!*\n\n` +
+      `📍 Address:\n\`${publicKey}\`\n\n` +
+      `🔑 Private Key:\n\`${privateKey}\`\n\n` +
+      `⚠️ *SAVE YOUR PRIVATE KEY!*\n` +
+      `Write it down in a safe place.\n\n` +
+      `💡 Send a name for this wallet (e.g. "Trading", "Main")`,
+      {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [Markup.button.callback('❌ Cancel', 'menu_wallets')]
         ])
-      });
-    } else {
-      await ctx.reply(importMessage, {
+      }
+    );
+
+  } catch (error: any) {
+    console.error('Create wallet error:', error);
+    await ctx.editMessageText(
+      `❌ *Failed to Create Wallet*\n\n${error.message}`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🔄 Retry', 'wallet_create')],
+          [Markup.button.callback('« Back', 'menu_wallets')]
+        ])
+      }
+    );
+  }
+}
+
+/**
+ * Import existing wallet
+ */
+async function handleImportWallet(ctx: Context) {
+  if (!ctx.from) return;
+
+  const userId = ctx.from.id;
+
+  await ctx.answerCbQuery();
+  
+  // Set state
+  walletStates.set(userId, {
+    action: 'import_wallet'
+  });
+
+  await ctx.editMessageText(
+    `📥 *Import Existing Wallet*\n\n` +
+    `🔑 Send me your Solana wallet private key\n\n` +
+    `⚠️ *Security Notes:*\n` +
+    `• Keys are encrypted before storage\n` +
+    `• Delete message after importing\n` +
+    `• Only import wallets you own\n\n` +
+    `💡 *Format:* Base58 private key\n` +
+    `📝 *Example:* 5JR8... (long string)`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'menu_wallets')]
+      ])
+    }
+  );
+}
+
+/**
+ * Process wallet import from text message
+ */
+async function processWalletImport(ctx: Context, privateKey: string, userId: number) {
+  await ctx.reply('⏳ *Verifying wallet...*', { parse_mode: 'Markdown' });
+
+  try {
+    // Validate private key format
+    if (!privateKey || privateKey.length < 32) {
+      throw new Error('Invalid private key format');
+    }
+
+    const { Keypair } = await import('@solana/web3.js');
+    const bs58 = await import('bs58');
+
+    // Try to decode and create keypair
+    let keypair: any;
+    try {
+      const secretKey = bs58.default.decode(privateKey.trim());
+      keypair = Keypair.fromSecretKey(secretKey);
+    } catch (e) {
+      throw new Error('Invalid Base58 private key');
+    }
+
+    const publicKey = keypair.publicKey.toString();
+
+    // Set state to name the wallet
+    walletStates.set(userId, {
+      action: 'name_wallet',
+      privateKey: privateKey.trim()
+    });
+
+    await ctx.reply(
+      `✅ *Wallet Verified!*\n\n` +
+      `📍 Address:\n\`${publicKey}\`\n\n` +
+      `💡 Send a name for this wallet (e.g. "Trading", "Import")`,
+      {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [Markup.button.callback('❌ Cancel', 'menu_wallets')]
         ])
-      });
+      }
+    );
+
+    // Try to delete the private key message
+    try {
+      await ctx.deleteMessage(ctx.message!.message_id);
+    } catch (e) {
+      await ctx.reply('⚠️ Please delete your private key message manually!');
     }
 
-    // Set user state to expect private key
-    // @ts-ignore
-    ctx.session = ctx.session || {};
-    // @ts-ignore
-    ctx.session.awaitingPrivateKey = true;
+  } catch (error: any) {
+    console.error('Import wallet error:', error);
+    
+    walletStates.delete(userId);
 
-  } catch (error) {
-    console.error('Error in import wallet:', error);
-    await ctx.reply('❌ Failed to start import. Please try again.');
+    await ctx.reply(
+      `❌ *Import Failed*\n\n` +
+      `${error.message}\n\n` +
+      `Please check your private key and try again.`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🔄 Retry', 'wallet_import')],
+          [Markup.button.callback('« Back', 'menu_wallets')]
+        ])
+      }
+    );
   }
 }
 
-// Process imported private key
-export async function processImportedKey(ctx: Context, privateKey: string) {
+/**
+ * Process wallet name
+ */
+async function processWalletName(ctx: Context, name: string, userId: number, privateKey: string) {
+  await ctx.reply('⏳ *Saving wallet...*', { parse_mode: 'Markdown' });
+
   try {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
+    if (!walletService) {
+      throw new Error('Wallet service not available');
+    }
 
-    // Clean up the private key (remove spaces, newlines)
-    const cleanedKey = privateKey.trim().replace(/\s/g, '');
+    if (!name || name.length < 2 || name.length > 20) {
+      throw new Error('Name must be 2-20 characters');
+    }
 
-    // Validate and extract public key
-    const publicKey = dexService.getPublicKeyFromPrivate(cleanedKey);
+    const { Keypair } = await import('@solana/web3.js');
+    const bs58 = await import('bs58');
     
-    if (!publicKey) {
-      await ctx.reply(
-        '❌ Invalid private key format.\n\n' +
-        '💡 Make sure you copied the entire key.\n' +
-        '💡 Use /wallet to try again.',
+    const secretKey = bs58.default.decode(privateKey);
+    const keypair = Keypair.fromSecretKey(secretKey);
+    const publicKey = keypair.publicKey.toString();
+
+    // Save wallet
+    await walletService.createWallet(
+      userId,
+      name.trim(),
+      publicKey,
+      privateKey
+    );
+
+    // Clear state
+    walletStates.delete(userId);
+
+    await ctx.reply(
+      `✅ *Wallet Saved!*\n\n` +
+      `💼 Name: ${name}\n` +
+      `📍 ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}\n\n` +
+      `Your wallet is ready to use!`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💼 View Wallets', 'menu_wallets')],
+          [Markup.button.callback('🪙 Trade Memecoins', 'menu_memecoins')],
+          [Markup.button.callback('🏠 Main Menu', 'back_main')]
+        ])
+      }
+    );
+
+  } catch (error: any) {
+    console.error('Save wallet error:', error);
+    
+    await ctx.reply(
+      `❌ *Failed to Save*\n\n${error.message}`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('« Back', 'menu_wallets')]
+        ])
+      }
+    );
+    
+    walletStates.delete(userId);
+  }
+}
+
+/**
+ * Manage wallets
+ */
+async function handleManageWallets(ctx: Context) {
+  if (!ctx.from) return;
+
+  await ctx.answerCbQuery();
+
+  try {
+    if (!walletService) {
+      throw new Error('Wallet service not available');
+    }
+
+    const userId = ctx.from.id;
+    const wallets = await walletService.getUserWallets(userId);
+
+    if (wallets.length === 0) {
+      await ctx.editMessageText(
+        `💼 *No Wallets*\n\nCreate or import a wallet first.`,
         {
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '🔄 Try Again', callback_data: 'wallet_import' }
-            ]]
-          }
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('➕ Create', 'wallet_create')],
+            [Markup.button.callback('📥 Import', 'wallet_import')],
+            [Markup.button.callback('« Back', 'menu_wallets')]
+          ])
         }
       );
       return;
     }
 
-    // Check if wallet already exists
-    const existingWallets = await getUserWallets(telegramId);
-    const walletExists = existingWallets.some(w => w.public_key === publicKey);
+    let message = `⚙️ *Manage Wallets*\n\n`;
+    message += `Select a wallet to manage:\n\n`;
 
-    if (walletExists) {
-      await ctx.reply('⚠️ This wallet is already imported!');
-      return;
-    }
-
-    // Save wallet
-    const isPrimary = existingWallets.length === 0;
-    const walletName = existingWallets.length === 0 
-      ? 'Main Wallet' 
-      : `Imported Wallet ${existingWallets.length + 1}`;
-
-    const wallet = await saveWallet(telegramId, publicKey, cleanedKey, walletName, isPrimary);
-
-    // Try to delete user's message with private key
-    try {
-      if (ctx.message) {
-        await ctx.deleteMessage(ctx.message.message_id);
-      }
-    } catch (e) {
-      console.log('Could not delete message (might lack permissions)');
-    }
-
-    await ctx.reply(
-      '✅ *Wallet Imported Successfully!*\n\n' +
-      `🏷️ *Name:* ${wallet.wallet_name}\n` +
-      `🔑 *Address:*\n\`${wallet.public_key}\`\n\n` +
-      `${isPrimary ? '⭐ Set as primary wallet\n\n' : ''}` +
-      '🔐 Your private key has been encrypted and stored securely.\n' +
-      '🗑️ Your message with the key has been deleted.',
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('💰 View Balance', `wallet_balance_${wallet.id}`),
-            Markup.button.callback('👛 My Wallets', 'menu_wallets')
-          ],
-          [
-            Markup.button.callback('« Back', 'back_main')
-          ]
-        ])
-      }
-    );
-
-    // Clear session state
-    // @ts-ignore
-    if (ctx.session) {
-      // @ts-ignore
-      ctx.session.awaitingPrivateKey = false;
-    }
-
-  } catch (error) {
-    console.error('Error importing wallet:', error);
-    await ctx.reply('❌ Failed to import wallet. Please check your private key and try again.');
-  }
-}
-
-// View wallet details
-export async function handleViewWallet(ctx: Context, walletId: string) {
-  try {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-
-    await ctx.answerCbQuery();
-
-    const wallets = await getUserWallets(telegramId);
-    const wallet = wallets.find(w => w.id === walletId);
-
-    if (!wallet) {
-      await ctx.reply('❌ Wallet not found.');
-      return;
-    }
-
-    // Get fresh balance
-    const balance = await dexService.getWalletBalance(wallet.public_key);
-
-    const message =
-      `👛 *${wallet.wallet_name}*\n\n` +
-      `🔑 *Address:*\n\`${wallet.public_key}\`\n\n` +
-      `💰 *Balance:* ${balance.toFixed(4)} SOL\n` +
-      `${wallet.is_primary ? '⭐ *Status:* Primary Wallet\n' : '📌 *Status:* Secondary Wallet\n'}\n` +
-      `📅 *Created:* ${new Date(wallet.created_at).toLocaleDateString()}\n\n` +
-      '💡 _Tap address to copy_';
-
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('🔄 Refresh', `wallet_balance_${wallet.id}`),
-            Markup.button.callback('📤 Export Key', `wallet_export_${wallet.id}`)
-          ],
-          [
-            Markup.button.callback(
-              wallet.is_primary ? '⭐ Primary' : '⭐ Set Primary',
-              wallet.is_primary ? 'noop' : `wallet_primary_${wallet.id}`
-            ),
-            Markup.button.callback('🗑️ Delete', `wallet_delete_confirm_${wallet.id}`)
-          ],
-          [
-            Markup.button.callback('« Back', 'menu_wallets')
-          ]
-        ])
-      });
-    } else {
-      await ctx.reply(message, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('🔄 Refresh', `wallet_balance_${wallet.id}`),
-            Markup.button.callback('📤 Export Key', `wallet_export_${wallet.id}`)
-          ],
-          [
-            Markup.button.callback(
-              wallet.is_primary ? '⭐ Primary' : '⭐ Set Primary',
-              wallet.is_primary ? 'noop' : `wallet_primary_${wallet.id}`
-            ),
-            Markup.button.callback('🗑️ Delete', `wallet_delete_confirm_${wallet.id}`)
-          ],
-          [
-            Markup.button.callback('« Back', 'menu_wallets')
-          ]
-        ])
-      });
-    }
-
-  } catch (error) {
-    console.error('Error viewing wallet:', error);
-    await ctx.reply('❌ Failed to load wallet details.');
-  }
-}
-
-// Refresh wallet balances
-export async function handleRefreshBalances(ctx: Context) {
-  try {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-
-    await ctx.answerCbQuery('Refreshing balances...');
-
-    const wallets = await getWalletsWithBalances(telegramId);
-
-    let message = '👛 *Your Wallets (Refreshed)*\n\n';
-    let totalBalance = 0;
+    const buttons: any[] = [];
 
     for (const wallet of wallets) {
-      const isPrimary = wallet.is_primary ? '⭐ ' : '';
-      const shortAddress = `${wallet.public_key.slice(0, 6)}...${wallet.public_key.slice(-4)}`;
-      const balance = wallet.balance || 0;
-      totalBalance += balance;
-      
-      message += `${isPrimary}*${wallet.wallet_name}*\n`;
-      message += `🔑 \`${shortAddress}\`\n`;
-      message += `💰 ${balance.toFixed(4)} SOL\n\n`;
+      const isPrimary = wallet.is_primary ? '⭐' : '';
+      message += `${isPrimary} *${wallet.wallet_name}*\n`;
+      message += `📍 ${wallet.public_key?.slice(0, 4)}...${wallet.public_key?.slice(-4)}\n\n`;
+
+      buttons.push([
+        Markup.button.callback(
+          `⚙️ ${wallet.wallet_name}`,
+          `select_wallet_${wallet.id}`
+        )
+      ]);
     }
 
-    message += `━━━━━━━━━━━━━━━━━━\n`;
-    message += `💎 *Total:* ${totalBalance.toFixed(4)} SOL`;
-
-    const buttons = wallets.map(w => [
-      Markup.button.callback(
-        `${w.is_primary ? '⭐ ' : ''}${w.wallet_name}`,
-        `wallet_view_${w.id}`
-      )
-    ]);
-
-    buttons.push(
-      [
-        Markup.button.callback('✨ Generate New', 'wallet_generate'),
-        Markup.button.callback('📥 Import', 'wallet_import')
-      ],
-      [
-        Markup.button.callback('« Back', 'back_main')
-      ]
-    );
+    buttons.push([Markup.button.callback('« Back', 'menu_wallets')]);
 
     await ctx.editMessageText(message, {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard(buttons)
     });
 
-  } catch (error) {
-    console.error('Error refreshing balances:', error);
-    await ctx.answerCbQuery('Failed to refresh');
-  }
-}
-
-// Set primary wallet
-export async function handleSetPrimaryWallet(ctx: Context, walletId: string) {
-  try {
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-
-    await ctx.answerCbQuery('Setting as primary wallet...');
-    await setPrimaryWallet(telegramId, walletId);
-
-    await handleViewWallet(ctx, walletId);
-  } catch (error) {
-    console.error('Error setting primary wallet:', error);
-    await ctx.answerCbQuery('Failed to set primary');
-  }
-}
-
-// Export private key (show with warning)
-export async function handleExportPrivateKey(ctx: Context, walletId: string) {
-  try {
-    await ctx.answerCbQuery();
-    
-    const warningMessage =
-      '⚠️ *Export Private Key*\n\n' +
-      '🔐 This will show your unencrypted private key.\n\n' +
-      '*⚠️ NEVER share your private key with anyone!*\n' +
-      '*⚠️ Anyone with this key can steal your funds!*\n\n' +
-      'Are you sure you want to continue?';
-
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(warningMessage, {
+  } catch (error: any) {
+    console.error('Manage wallets error:', error);
+    await ctx.editMessageText(
+      `❌ Error loading wallets`,
+      {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ Yes, Show Key', `wallet_export_confirm_${walletId}`),
-            Markup.button.callback('❌ Cancel', `wallet_view_${walletId}`)
-          ]
+          [Markup.button.callback('« Back', 'menu_wallets')]
         ])
-      });
-    }
-  } catch (error) {
-    console.error('Error in export key:', error);
+      }
+    );
   }
 }
 
-// Confirm export and show private key
-export async function handleExportPrivateKeyConfirm(ctx: Context, walletId: string) {
-  try {
-    await ctx.answerCbQuery();
-    
-    // Get decrypted key
-    const privateKey = await getDecryptedPrivateKey(walletId);
+/**
+ * Select wallet for management
+ */
+async function handleSelectWallet(ctx: Context, walletId: string) {
+  if (!ctx.from) return;
 
-    if (!privateKey) {
-      await ctx.reply('❌ Failed to retrieve private key.');
-      return;
+  await ctx.answerCbQuery();
+
+  try {
+    if (!walletService) throw new Error('Wallet service not available');
+
+    const wallet = await walletService.getWalletById(walletId);
+
+    if (!wallet) {
+      throw new Error('Wallet not found');
     }
 
-    // Send private key in a separate message that can be deleted
-    await ctx.reply(
-      '🔐 *Your Private Key:*\n\n' +
-      `\`${privateKey}\`\n\n` +
-      '⚠️ *DELETE THIS MESSAGE IMMEDIATELY AFTER COPYING!*\n' +
-      '⚠️ *Never share this with anyone!*\n' +
-      '⚠️ *Anyone with access can steal your funds!*',
+    const isPrimary = wallet.is_primary;
+
+    let message = `⚙️ *Manage Wallet*\n\n`;
+    message += `💼 Name: ${wallet.wallet_name}\n`;
+    message += `📍 ${wallet.public_key?.slice(0, 4)}...${wallet.public_key?.slice(-4)}\n`;
+    message += `💰 Balance: ${(wallet.balance || 0).toFixed(4)} SOL\n`;
+    message += `${isPrimary ? '⭐ Primary Wallet' : ''}\n\n`;
+    message += `What would you like to do?`;
+
+    const buttons: any[] = [];
+
+    if (!isPrimary) {
+      buttons.push([
+        Markup.button.callback('⭐ Set as Primary', `set_primary_${walletId}`)
+      ]);
+    }
+
+    buttons.push([
+      Markup.button.callback('🗑️ Delete Wallet', `delete_wallet_${walletId}`)
+    ]);
+    buttons.push([Markup.button.callback('« Back', 'wallet_manage')]);
+
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard(buttons)
+    });
+
+  } catch (error: any) {
+    console.error('Select wallet error:', error);
+    await ctx.editMessageText(
+      `❌ Error: ${error.message}`,
       {
-        parse_mode: 'Markdown'
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('« Back', 'wallet_manage')]
+        ])
+      }
+    );
+  }
+}
+
+/**
+ * Set primary wallet
+ */
+async function handleSetPrimary(ctx: Context, walletId: string) {
+  if (!ctx.from) return;
+
+  await ctx.answerCbQuery('Setting primary...');
+
+  try {
+    if (!walletService) throw new Error('Wallet service not available');
+
+    await walletService.setPrimaryWallet(ctx.from.id, walletId);
+
+    await ctx.editMessageText(
+      `✅ *Primary Wallet Updated!*\n\nThis wallet will be used for all transactions.`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💼 View Wallets', 'menu_wallets')],
+          [Markup.button.callback('🏠 Main Menu', 'back_main')]
+        ])
       }
     );
 
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(
-        '✅ Private key sent!\n\n' +
-        '⚠️ Make sure to delete the message after copying.\n\n' +
-        '💡 Use /wallet to return to wallet management.',
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('👛 My Wallets', 'menu_wallets')]
-          ])
-        }
-      );
-    }
-
-  } catch (error) {
-    console.error('Error exporting key:', error);
-    await ctx.reply('❌ Failed to export private key.');
+  } catch (error: any) {
+    console.error('Set primary error:', error);
+    await ctx.answerCbQuery(`❌ Error: ${error.message}`);
   }
 }
 
-// Delete wallet confirmation
-export async function handleDeleteWalletConfirm(ctx: Context, walletId: string) {
-  try {
-    await ctx.answerCbQuery();
-    
-    const confirmMessage =
-      '⚠️ *Delete Wallet*\n\n' +
-      '❗ This action cannot be undone!\n' +
-      '❗ Make sure you have exported your private key!\n' +
-      '❗ All data for this wallet will be lost!\n\n' +
-      'Are you sure you want to delete this wallet?';
+/**
+ * Delete wallet confirmation
+ */
+async function handleDeleteWallet(ctx: Context, walletId: string) {
+  if (!ctx.from) return;
 
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(confirmMessage, {
+  await ctx.answerCbQuery();
+
+  await ctx.editMessageText(
+    `⚠️ *Delete Wallet?*\n\n` +
+    `This action cannot be undone.\n\n` +
+    `Make sure you have backed up your private key!\n\n` +
+    `Are you sure?`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('✅ Yes, Delete', `confirm_delete_${walletId}`),
+          Markup.button.callback('❌ Cancel', `select_wallet_${walletId}`)
+        ]
+      ])
+    }
+  );
+}
+
+/**
+ * Confirm delete wallet
+ */
+async function handleConfirmDelete(ctx: Context, walletId: string) {
+  if (!ctx.from) return;
+
+  await ctx.answerCbQuery('Deleting...');
+
+  try {
+    if (!walletService) throw new Error('Wallet service not available');
+
+    await walletService.deleteWallet(walletId);
+
+    await ctx.editMessageText(
+      `✅ *Wallet Deleted*\n\nThe wallet has been removed.`,
+      {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback('🗑️ Yes, Delete Forever', `wallet_delete_${walletId}`),
-            Markup.button.callback('❌ Cancel', `wallet_view_${walletId}`)
-          ]
+          [Markup.button.callback('💼 View Wallets', 'menu_wallets')],
+          [Markup.button.callback('🏠 Main Menu', 'back_main')]
         ])
-      });
-    }
-  } catch (error) {
-    console.error('Error in delete confirm:', error);
+      }
+    );
+
+  } catch (error: any) {
+    console.error('Delete wallet error:', error);
+    await ctx.answerCbQuery(`❌ Error: ${error.message}`);
   }
-}
-
-// Delete wallet
-export async function handleDeleteWallet(ctx: Context, walletId: string) {
-  try {
-    await ctx.answerCbQuery('Deleting wallet...');
-    await deleteWallet(walletId);
-
-    if (ctx.callbackQuery && 'message' in ctx.callbackQuery) {
-      await ctx.editMessageText(
-        '✅ Wallet deleted successfully.\n\n' +
-        '🔐 All encrypted data has been removed.',
-        {
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('👛 My Wallets', 'menu_wallets')]
-          ])
-        }
-      );
-    } else {
-      await ctx.reply(
-        '✅ Wallet deleted successfully.\n\n' +
-        '🔐 All encrypted data has been removed.',
-        {
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('👛 My Wallets', 'menu_wallets')]
-          ])
-        }
-      );
-    }
-  } catch (error) {
-    console.error('Error deleting wallet:', error);
-    await ctx.answerCbQuery('Failed to delete wallet');
-  }
-}
-
-// Handle noop action (for disabled buttons)
-export async function handleNoop(ctx: Context) {
-  await ctx.answerCbQuery();
 }

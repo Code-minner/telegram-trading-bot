@@ -14,6 +14,28 @@ try {
 export const walletStates = new Map<number, any>();
 
 /**
+ * Safely edit message text - handles "message not modified" error
+ */
+async function safeEditMessage(ctx: Context, text: string, extra?: any) {
+  try {
+    await ctx.editMessageText(text, extra);
+  } catch (error: any) {
+    if (error.message?.includes('message is not modified')) {
+      // Message is already the same - ignore error
+      console.log('[WALLET] Message unchanged - skipping edit');
+      return;
+    }
+    // For other errors, try sending as new message
+    console.error('[WALLET] Edit failed, sending new message:', error.message);
+    try {
+      await ctx.reply(text, extra);
+    } catch (replyError) {
+      console.error('[WALLET] Reply also failed:', replyError);
+    }
+  }
+}
+
+/**
  * Main wallet command handler
  */
 export async function handleWalletCommand(ctx: Context) {
@@ -187,7 +209,9 @@ async function handleCreateWallet(ctx: Context) {
   if (!ctx.from) return;
 
   await ctx.answerCbQuery();
-  await ctx.editMessageText('⏳ *Creating Wallet...*', {
+  
+  // Use reply instead of editMessageText to avoid conflicts
+  await ctx.reply('⏳ *Creating Wallet...*', {
     parse_mode: 'Markdown'
   });
 
@@ -210,7 +234,7 @@ async function handleCreateWallet(ctx: Context) {
       privateKey: privateKey
     });
 
-    await ctx.editMessageText(
+    await ctx.reply(
       `✅ *Wallet Created!*\n\n` +
       `📍 Address:\n\`${publicKey}\`\n\n` +
       `🔑 Private Key:\n\`${privateKey}\`\n\n` +
@@ -226,8 +250,8 @@ async function handleCreateWallet(ctx: Context) {
     );
 
   } catch (error: any) {
-    console.error('Create wallet error:', error);
-    await ctx.editMessageText(
+    console.error('[WALLET] Create wallet error:', error);
+    await ctx.reply(
       `❌ *Failed to Create Wallet*\n\n${error.message}`,
       {
         parse_mode: 'Markdown',
@@ -248,14 +272,19 @@ async function handleImportWallet(ctx: Context) {
 
   const userId = ctx.from.id;
 
-  await ctx.answerCbQuery();
+  // Answer callback query (ignore if already answered)
+  try {
+    await ctx.answerCbQuery();
+  } catch (e) {
+    // Already answered
+  }
   
   // Set state
   walletStates.set(userId, {
     action: 'import_wallet'
   });
 
-  await ctx.editMessageText(
+  const message = 
     `📥 *Import Existing Wallet*\n\n` +
     `🔑 Send me your Solana wallet private key\n\n` +
     `⚠️ *Security Notes:*\n` +
@@ -263,14 +292,38 @@ async function handleImportWallet(ctx: Context) {
     `• Delete message after importing\n` +
     `• Only import wallets you own\n\n` +
     `💡 *Format:* Base58 private key\n` +
-    `📝 *Example:* 5JR8... (long string)`,
-    {
+    `📝 *Example:* 5JR8... (long string)`;
+    
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'menu_wallets')]
+  ]);
+
+  // Use try-catch to handle "message not modified" error
+  try {
+    await ctx.editMessageText(message, {
       parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('❌ Cancel', 'menu_wallets')]
-      ])
+      ...keyboard
+    });
+  } catch (error: any) {
+    // If message is the same, just ignore - user already sees it
+    if (error.message?.includes('message is not modified')) {
+      console.log('[WALLET] Message already showing import instructions');
+      return; // Silently succeed - state is set, user sees instructions
     }
-  );
+    
+    // For other errors, try sending as new message
+    console.error('[WALLET] Edit message failed:', error.message);
+    try {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        ...keyboard
+      });
+    } catch (replyError: any) {
+      console.error('[WALLET] Reply also failed:', replyError.message);
+      // Last resort - just tell user what to do
+      await ctx.reply('📥 Send your Solana private key to import wallet.');
+    }
+  }
 }
 
 /**
@@ -348,34 +401,52 @@ async function processWalletImport(ctx: Context, privateKey: string, userId: num
  * Process wallet name
  */
 async function processWalletName(ctx: Context, name: string, userId: number, privateKey: string) {
+  console.log(`[WALLET] Processing name for user ${userId}: ${name}`);
+  
   await ctx.reply('⏳ *Saving wallet...*', { parse_mode: 'Markdown' });
 
   try {
-    if (!walletService) {
-      throw new Error('Wallet service not available');
-    }
-
+    // Validate name first
     if (!name || name.length < 2 || name.length > 20) {
       throw new Error('Name must be 2-20 characters');
     }
 
+    console.log('[WALLET] Decoding private key...');
     const { Keypair } = await import('@solana/web3.js');
     const bs58 = await import('bs58');
     
     const secretKey = bs58.default.decode(privateKey);
     const keypair = Keypair.fromSecretKey(secretKey);
     const publicKey = keypair.publicKey.toString();
+    
+    console.log(`[WALLET] Public key: ${publicKey}`);
 
-    // Save wallet
-    await walletService.createWallet(
-      userId,
-      name.trim(),
-      publicKey,
-      privateKey
-    );
+    // Try to save wallet
+    if (!walletService) {
+      console.error('[WALLET] Wallet service not available - using fallback');
+      
+      // Fallback: Save to old system
+      try {
+        await userService.saveSolanaWallet(userId, privateKey);
+        console.log('[WALLET] Saved using fallback method');
+      } catch (fallbackError: any) {
+        console.error('[WALLET] Fallback save failed:', fallbackError);
+        throw new Error('Could not save wallet');
+      }
+    } else {
+      console.log('[WALLET] Creating wallet in database...');
+      await walletService.createWallet(
+        userId,
+        name.trim(),
+        publicKey,
+        privateKey
+      );
+      console.log('[WALLET] Wallet created successfully');
+    }
 
     // Clear state
     walletStates.delete(userId);
+    console.log('[WALLET] State cleared');
 
     await ctx.reply(
       `✅ *Wallet Saved!*\n\n` +
@@ -393,19 +464,24 @@ async function processWalletName(ctx: Context, name: string, userId: number, pri
     );
 
   } catch (error: any) {
-    console.error('Save wallet error:', error);
+    console.error('[WALLET] Save wallet error:', error);
+    console.error('[WALLET] Error stack:', error.stack);
+    
+    // Clear state even on error
+    walletStates.delete(userId);
     
     await ctx.reply(
-      `❌ *Failed to Save*\n\n${error.message}`,
+      `❌ *Failed to Save*\n\n` +
+      `Error: ${error.message}\n\n` +
+      `Please try again or contact support.`,
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
+          [Markup.button.callback('🔄 Retry Import', 'wallet_import')],
           [Markup.button.callback('« Back', 'menu_wallets')]
         ])
       }
     );
-    
-    walletStates.delete(userId);
   }
 }
 
@@ -426,7 +502,8 @@ async function handleManageWallets(ctx: Context) {
     const wallets = await walletService.getUserWallets(userId);
 
     if (wallets.length === 0) {
-      await ctx.editMessageText(
+      await safeEditMessage(
+        ctx,
         `💼 *No Wallets*\n\nCreate or import a wallet first.`,
         {
           parse_mode: 'Markdown',
@@ -460,14 +537,15 @@ async function handleManageWallets(ctx: Context) {
 
     buttons.push([Markup.button.callback('« Back', 'menu_wallets')]);
 
-    await ctx.editMessageText(message, {
+    await safeEditMessage(ctx, message, {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard(buttons)
     });
 
   } catch (error: any) {
     console.error('Manage wallets error:', error);
-    await ctx.editMessageText(
+    await safeEditMessage(
+      ctx,
       `❌ Error loading wallets`,
       {
         parse_mode: 'Markdown',

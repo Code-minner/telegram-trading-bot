@@ -54,7 +54,29 @@ export async function saveWallet(
     .single();
 
   if (error) throw new Error('Failed to save wallet: ' + error.message);
+  
+  // Fetch initial balance
+  try {
+    const balance = await dexService.getWalletBalance(publicKey);
+    data.balance = balance;
+    await updateWalletBalance(data.id, balance);
+  } catch (error) {
+    console.error('Failed to fetch initial balance:', error);
+    data.balance = 0;
+  }
+  
   return data;
+}
+
+// Alias for compatibility - createWallet = saveWallet
+export async function createWallet(
+  telegramId: number,
+  walletName: string,
+  publicKey: string,
+  privateKey: string,
+  isPrimary: boolean = false
+): Promise<WalletInfo> {
+  return await saveWallet(telegramId, publicKey, privateKey, walletName, isPrimary);
 }
 
 // Get user's wallets
@@ -66,7 +88,48 @@ export async function getUserWallets(telegramId: number): Promise<WalletInfo[]> 
     .order('created_at', { ascending: false });
 
   if (error) throw new Error('Failed to fetch wallets: ' + error.message);
+  
+  // Fetch balances for all wallets
+  if (data) {
+    for (const wallet of data) {
+      try {
+        const balance = await dexService.getWalletBalance(wallet.public_key);
+        wallet.balance = balance;
+      } catch (error) {
+        console.error(`Failed to fetch balance for ${wallet.wallet_name}:`, error);
+        wallet.balance = 0;
+      }
+    }
+  }
+  
   return data || [];
+}
+
+// Get wallet by ID
+export async function getWalletById(walletId: string): Promise<WalletInfo | null> {
+  const { data, error } = await supabase
+    .from('wallets')
+    .select('*')
+    .eq('id', walletId)
+    .single();
+
+  if (error) {
+    console.error('Failed to get wallet by ID:', error);
+    return null;
+  }
+
+  // Fetch current balance
+  if (data) {
+    try {
+      const balance = await dexService.getWalletBalance(data.public_key);
+      data.balance = balance;
+    } catch (error) {
+      console.error('Failed to fetch balance:', error);
+      data.balance = 0;
+    }
+  }
+
+  return data;
 }
 
 // Get primary wallet
@@ -79,6 +142,18 @@ export async function getPrimaryWallet(telegramId: number): Promise<WalletInfo |
     .single();
 
   if (error) return null;
+  
+  // Fetch current balance
+  if (data) {
+    try {
+      const balance = await dexService.getWalletBalance(data.public_key);
+      data.balance = balance;
+    } catch (error) {
+      console.error('Failed to fetch balance:', error);
+      data.balance = 0;
+    }
+  }
+  
   return data;
 }
 
@@ -164,7 +239,7 @@ export async function generateAndSaveMultipleWallets(
   return wallets;
 }
 
-// Get all wallets with balances
+// Get all wallets with balances (force refresh)
 export async function getWalletsWithBalances(telegramId: number): Promise<WalletInfo[]> {
   const wallets = await getUserWallets(telegramId);
   
@@ -176,6 +251,7 @@ export async function getWalletsWithBalances(telegramId: number): Promise<Wallet
       await updateWalletBalance(wallet.id, balance);
     } catch (error) {
       console.error(`Failed to update balance for wallet ${wallet.id}:`, error);
+      wallet.balance = 0;
     }
   }
 
@@ -188,11 +264,8 @@ export async function getTotalBalance(telegramId: number): Promise<number> {
   let total = 0;
 
   for (const wallet of wallets) {
-    try {
-      const balance = await dexService.getWalletBalance(wallet.public_key);
-      total += balance;
-    } catch (error) {
-      console.error(`Failed to get balance for wallet ${wallet.id}:`, error);
+    if (wallet.balance) {
+      total += wallet.balance;
     }
   }
 

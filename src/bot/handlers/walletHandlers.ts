@@ -407,83 +407,86 @@ async function processWalletImport(
 /**
  * Process wallet name
  */
-async function processWalletName(ctx: Context, name: string, userId: number, privateKey: string) {
+async function processWalletName(
+  ctx: Context,
+  name: string,
+  userId: number,
+  privateKey: string
+) {
   console.log(`[WALLET] Processing name for user ${userId}: ${name}`);
-  
-  await ctx.reply('⏳ *Saving wallet...*', { parse_mode: 'Markdown' });
+
+  await ctx.reply("⏳ *Saving wallet...*", { parse_mode: "Markdown" });
 
   try {
     // Validate name first
     if (!name || name.length < 2 || name.length > 20) {
-      throw new Error('Name must be 2-20 characters');
+      throw new Error("Name must be 2-20 characters");
     }
 
-    console.log('[WALLET] Decoding private key...');
-    const { Keypair } = await import('@solana/web3.js');
-    const bs58 = await import('bs58');
-    
+    console.log("[WALLET] Decoding private key...");
+    const { Keypair } = await import("@solana/web3.js");
+    const bs58 = await import("bs58");
+
     const secretKey = bs58.default.decode(privateKey);
     const keypair = Keypair.fromSecretKey(secretKey);
     const publicKey = keypair.publicKey.toString();
-    
+
     console.log(`[WALLET] Public key: ${publicKey}`);
 
     // Save wallet using the correct function
     if (!walletService) {
-      console.log('[WALLET] Wallet service not available - using fallback');
+      console.log("[WALLET] Wallet service not available - using fallback");
       await userService.saveSolanaWallet(userId, privateKey);
-      console.log('[WALLET] Saved using fallback method');
+      console.log("[WALLET] Saved using fallback method");
     } else {
-      console.log('[WALLET] Saving wallet to database...');
-      
-      // Use saveWallet (not createWallet!)
-      await walletService.saveWallet(
-        userId,          // telegramId
-        publicKey,       // publicKey
-        privateKey,      // privateKey
-        name.trim(),     // walletName
-        false            // isPrimary
+      console.log("[WALLET] Saving wallet to database...");
+
+      await walletService.createWallet(
+        userId, // telegramId
+        name.trim(), // walletName
+        publicKey, // publicKey
+        privateKey, // privateKey
+        false // isPrimary
       );
-      
-      console.log('[WALLET] Wallet saved successfully');
+
+      console.log("[WALLET] Wallet saved successfully");
     }
 
     // Clear state
     walletStates.delete(userId);
-    console.log('[WALLET] State cleared');
+    console.log("[WALLET] State cleared");
 
     await ctx.reply(
       `✅ *Wallet Saved!*\n\n` +
-      `💼 Name: ${name}\n` +
-      `📍 ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}\n\n` +
-      `Your wallet is ready to use!`,
+        `💼 Name: ${name}\n` +
+        `📍 ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}\n\n` +
+        `Your wallet is ready to use!`,
       {
-        parse_mode: 'Markdown',
+        parse_mode: "Markdown",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('💼 View Wallets', 'menu_wallets')],
-          [Markup.button.callback('🪙 Trade Memecoins', 'menu_memecoins')],
-          [Markup.button.callback('🏠 Main Menu', 'back_main')]
-        ])
+          [Markup.button.callback("💼 View Wallets", "menu_wallets")],
+          [Markup.button.callback("🪙 Trade Memecoins", "menu_memecoins")],
+          [Markup.button.callback("🏠 Main Menu", "back_main")],
+        ]),
       }
     );
-
   } catch (error: any) {
-    console.error('[WALLET] Save wallet error:', error);
-    console.error('[WALLET] Error stack:', error.stack);
-    
+    console.error("[WALLET] Save wallet error:", error);
+    console.error("[WALLET] Error stack:", error.stack);
+
     // Clear state even on error
     walletStates.delete(userId);
-    
+
     await ctx.reply(
       `❌ *Failed to Save*\n\n` +
-      `Error: ${error.message}\n\n` +
-      `Please try again or contact support.`,
+        `Error: ${error.message}\n\n` +
+        `Please try again or contact support.`,
       {
-        parse_mode: 'Markdown',
+        parse_mode: "Markdown",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('🔄 Retry Import', 'wallet_import')],
-          [Markup.button.callback('« Back', 'menu_wallets')]
-        ])
+          [Markup.button.callback("🔄 Retry Import", "wallet_import")],
+          [Markup.button.callback("« Back", "menu_wallets")],
+        ]),
       }
     );
   }

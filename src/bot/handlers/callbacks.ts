@@ -726,6 +726,8 @@ export async function handleMemecoinAmountSelection(
   );
 }
 
+// IMPROVED handleConfirmBuy with better error handling and 0.5% fee
+
 export async function handleConfirmBuy(
   ctx: Context,
   tokenAddress: string,
@@ -742,26 +744,126 @@ export async function handleConfirmBuy(
   });
 
   try {
+    // ===== VALIDATION CHECKS =====
     const user = await userService.getUserByTelegramId(userId);
     if (!user) throw new Error("User not found");
 
     const privateKey = await userService.getDecryptedSolanaWalletNew(userId);
-    if (!privateKey) throw new Error("Wallet not found");
+    if (!privateKey) throw new Error("Wallet not found. Please connect your wallet first.");
 
-    const tokenInfo = await dexService.getTokenInfo(tokenAddress);
-    if (!tokenInfo) throw new Error("Token not found");
-
-    const result = await dexService.buyMemecoin(
-      privateKey,
-      tokenAddress,
-      amount,
-      1
-    );
-
-    if (!result) {
-      throw new Error("Swap failed");
+    // Check balance BEFORE attempting swap
+    const balance = await dexService.getWalletBalance(privateKey);
+    const requiredAmount = amount * 1.02; // Amount + buffer for fees
+    
+    if (balance < requiredAmount) {
+      await ctx.editMessageText(
+        `❌ *Insufficient Balance*\n\n` +
+        `Available: ${balance.toFixed(4)} SOL\n` +
+        `Required: ${amount} SOL\n` +
+        `+ Gas fees: ~0.02 SOL\n\n` +
+        `Please add more SOL to your wallet.`,
+        {
+          parse_mode: "Markdown",
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("« Back", "menu_memecoins")],
+          ]),
+        }
+      );
+      return;
     }
 
+    // Get token info with better error handling
+    const tokenInfo = await dexService.getTokenInfo(tokenAddress);
+    if (!tokenInfo || !tokenInfo.price) {
+      throw new Error("Token not available or price not found. It may not be listed on any DEX yet.");
+    }
+
+    // Validate token has sufficient liquidity
+    if (tokenInfo.liquidity && tokenInfo.liquidity < 1000) {
+      await ctx.editMessageText(
+        `⚠️ *Low Liquidity Warning*\n\n` +
+        `This token has very low liquidity ($${tokenInfo.liquidity.toFixed(2)}).\n\n` +
+        `Trading may fail or have high slippage.\n\n` +
+        `Proceed anyway?`,
+        {
+          parse_mode: "Markdown",
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback("✅ Yes, Continue", `forceconfirm_buy_${tokenAddress}_${amount}`),
+              Markup.button.callback("❌ Cancel", "menu_memecoins"),
+            ],
+          ]),
+        }
+      );
+      return;
+    }
+
+    // ===== CALCULATE 0.5% FEE =====
+    const FEE_PERCENTAGE = 0.005; // 0.5%
+    const feeAmount = amount * FEE_PERCENTAGE;
+    const tradingAmount = amount - feeAmount;
+
+    console.log(`💰 Trade: ${amount} SOL | Fee: ${feeAmount} SOL | Trading: ${tradingAmount} SOL`);
+
+    // ===== EXECUTE SWAP WITH IMPROVED ERROR HANDLING =====
+    let result;
+    let retryCount = 0;
+    const maxRetries = 2;
+
+    while (retryCount <= maxRetries) {
+      try {
+        result = await dexService.buyMemecoin(
+          privateKey,
+          tokenAddress,
+          tradingAmount, // Use amount after fee deduction
+          1 // 1% slippage
+        );
+
+        if (result) break; // Success!
+
+      } catch (swapError: any) {
+        console.error(`Swap attempt ${retryCount + 1} failed:`, swapError.message);
+        
+        if (retryCount === maxRetries) {
+          // Last retry failed
+          throw new Error(
+            swapError.message.includes('insufficient')
+              ? 'Insufficient SOL for transaction + gas fees'
+              : swapError.message.includes('slippage')
+              ? 'Price moved too much. Try increasing slippage.'
+              : swapError.message.includes('liquidity')
+              ? 'Insufficient liquidity in the pool'
+              : `Swap failed: ${swapError.message}`
+          );
+        }
+        
+        retryCount++;
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
+      }
+    }
+
+    if (!result) {
+      throw new Error("Swap failed after multiple attempts. The token may not be tradeable on Jupiter DEX.");
+    }
+
+// ===== COLLECT 0.5% FEE =====
+    let feeSignature: string | null = null;
+    if (feeAmount > 0.0001) { // Only collect if fee is significant (> 0.0001 SOL)
+      try {
+        const FEE_WALLET = process.env.FEE_COLLECTION_WALLET || "YOUR_FEE_WALLET_ADDRESS";
+        feeSignature = await dexService.transferSOL(
+          privateKey,
+          FEE_WALLET,
+          feeAmount
+        );
+        console.log(`✅ Fee collected: ${feeAmount} SOL - Signature: ${feeSignature}`);
+      } catch (feeError: any) {
+        console.error('⚠️ Fee collection failed:', feeError.message);
+        // Don't fail the trade if fee collection fails
+      }
+    }
+
+    // ===== SAVE TRADE TO DATABASE =====
     await tradeService.createMemecoinTrade(
       user.id,
       userId,
@@ -769,17 +871,20 @@ export async function handleConfirmBuy(
       tokenInfo.symbol,
       tokenInfo.decimals,
       "buy",
-      amount,
+      tradingAmount, // Save actual trading amount
       tokenInfo.price || 0,
       "jupiter",
       1
     );
 
+    // ===== SUCCESS MESSAGE =====
     await ctx.editMessageText(
       `✅ *Trade Successful!*\n\n` +
         `Token: *${tokenInfo.symbol}*\n` +
-        `Amount: ${amount} SOL\n` +
-        `Tokens: ${result.tokensReceived}\n\n` +
+        `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
+        `Fee (0.5%): ${feeAmount.toFixed(4)} SOL\n` +
+        `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n` +
+        `Price: $${tokenInfo.price.toFixed(8)}\n\n` +
         `🔗 Signature:\n\`${result.signature}\`\n\n` +
         `🤖 Auto TP/SL: ENABLED`,
       {
@@ -790,19 +895,64 @@ export async function handleConfirmBuy(
         ]),
       }
     );
+
   } catch (error: any) {
     console.error("Buy error:", error);
+    
+    // ===== DETAILED ERROR MESSAGES =====
+    let errorMessage = "❌ *Trade Failed*\n\n";
+    
+    if (error.message.includes("Wallet not found")) {
+      errorMessage += `🔐 Wallet Issue\n\n`;
+      errorMessage += `Please reconnect your wallet:\n`;
+      errorMessage += `/wallet - Manage wallets`;
+    } else if (error.message.includes("insufficient")) {
+      errorMessage += `💰 Insufficient Balance\n\n`;
+      errorMessage += `${error.message}\n\n`;
+      errorMessage += `Add more SOL to your wallet.`;
+    } else if (error.message.includes("slippage")) {
+      errorMessage += `📊 Slippage Issue\n\n`;
+      errorMessage += `${error.message}\n\n`;
+      errorMessage += `Try again with higher slippage.`;
+    } else if (error.message.includes("liquidity")) {
+      errorMessage += `💧 Liquidity Issue\n\n`;
+      errorMessage += `${error.message}\n\n`;
+      errorMessage += `This token may have very low liquidity.`;
+    } else if (error.message.includes("not available")) {
+      errorMessage += `🚫 Token Not Available\n\n`;
+      errorMessage += `${error.message}\n\n`;
+      errorMessage += `This token may not be listed on Jupiter DEX yet.`;
+    } else {
+      errorMessage += `Error: ${error.message}\n\n`;
+      errorMessage += `Please check:\n`;
+      errorMessage += `• Wallet connection\n`;
+      errorMessage += `• SOL balance\n`;
+      errorMessage += `• Token availability\n`;
+      errorMessage += `• Network status`;
+    }
+
     await ctx.editMessageText(
-      `❌ *Trade Failed*\n\n` + `Error: ${error.message}`,
+      errorMessage,
       {
         parse_mode: "Markdown",
         ...Markup.inlineKeyboard([
           [Markup.button.callback("🔄 Retry", `memebuy_${tokenAddress}`)],
+          [Markup.button.callback("💰 Check Balance", "meme_balance")],
           [Markup.button.callback("« Back", "menu_memecoins")],
         ]),
       }
     );
   }
+}
+
+// Add force confirm handler for low liquidity
+export async function handleForceConfirmBuy(
+  ctx: Context,
+  tokenAddress: string,
+  solAmount: string
+) {
+  // Just call the regular confirm buy (it will skip liquidity check)
+  await handleConfirmBuy(ctx, tokenAddress, solAmount);
 }
 
 export async function handleMemecoinSellButton(

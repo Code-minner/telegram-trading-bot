@@ -1,9 +1,10 @@
-// bot/features/tokenDisplay.ts - COMPLETE FIXED VERSION WITH NEW WALLET SYSTEM
+// bot/features/tokenDisplay.ts - WITH IMAGE OPTIMIZATION FOR CHARTS
 import axios from "axios";
 import { Context, Markup } from "telegraf";
 import { dexService } from "../../services/dexService";
 import * as riskManager from "../../utils/riskManager";
 import * as userService from "../../services/userService";
+import sharp from 'sharp'; // ⭐ ADD THIS IMPORT
 
 /**
  * Checks if text is a valid Solana token address
@@ -36,11 +37,106 @@ async function getTokenSecurity(tokenAddress: string): Promise<any> {
   }
 }
 
+// ===== 🆕 NEW: OPTIMIZED CHART IMAGE FUNCTION =====
 /**
- * Get chart image URL from DexScreener
+ * Fetch and optimize chart image for Telegram
+ * Fixes IMAGE_PROCESS_FAILED error by compressing images
  */
-function getChartImageUrl(pairAddress: string): string {
-  return `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddress}.png`;
+async function getOptimizedChartImage(pairAddress: string): Promise<Buffer | null> {
+  const chartUrls = [
+    `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddress}.png`,
+    `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddress}.jpg`,
+  ];
+
+  for (const url of chartUrls) {
+    try {
+      console.log(`📊 Fetching chart from: ${url}`);
+      
+      // Download image with timeout
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; TradingBot/1.0)',
+          'Accept': 'image/png,image/jpeg,image/*'
+        }
+      });
+
+      if (!response.data || response.data.byteLength === 0) {
+        console.log(`❌ Empty response from ${url}`);
+        continue;
+      }
+
+      console.log(`✅ Downloaded ${(response.data.byteLength / 1024).toFixed(2)} KB`);
+
+      // Optimize image using Sharp
+      const optimizedBuffer = await sharp(response.data)
+        .resize(1280, 720, { 
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .jpeg({ 
+          quality: 85,
+          progressive: true,
+          mozjpeg: true // Better compression
+        })
+        .toBuffer();
+
+      const sizeInMB = optimizedBuffer.byteLength / (1024 * 1024);
+      console.log(`✅ Optimized to ${sizeInMB.toFixed(2)} MB`);
+
+      // Telegram limit is 5MB for photos
+      if (sizeInMB > 4.5) {
+        console.log(`⚠️ Still too large, compressing more...`);
+        // If still too large, compress more aggressively
+        return await sharp(response.data)
+          .resize(960, 540, {
+            fit: 'inside',
+            withoutEnlargement: true
+          })
+          .jpeg({
+            quality: 70,
+            progressive: true,
+            mozjpeg: true
+          })
+          .toBuffer();
+      }
+
+      return optimizedBuffer;
+
+    } catch (error: any) {
+      console.error(`❌ Chart fetch/optimization failed for ${url}:`, error.message);
+      continue;
+    }
+  }
+
+  console.log(`❌ All chart URLs failed for pair ${pairAddress}`);
+  return null;
+}
+
+/**
+ * ALTERNATIVE: Simple version without Sharp (if Sharp installation fails)
+ * Just uses smaller image sizes from DexScreener
+ */
+async function getSimpleChartUrl(pairAddress: string): Promise<string | null> {
+  const smallUrls = [
+    `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddress}.png?size=sm`,
+    `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddress}.jpg?size=sm`,
+  ];
+
+  for (const url of smallUrls) {
+    try {
+      // Quick check if URL is accessible
+      const response = await axios.head(url, { timeout: 5000 });
+      if (response.status === 200) {
+        return url;
+      }
+    } catch (error) {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -74,21 +170,19 @@ export async function handleTokenAddressMessage(
     const price = await dexService.getTokenPrice(text);
     const message = formatEnhancedTokenDisplay(tokenInfo, price, security);
 
-    // Try to send with chart
+    // ===== 🆕 IMPROVED: TRY TO SEND WITH OPTIMIZED CHART =====
     let sentWithChart = false;
+    
     if (tokenInfo.pairAddress) {
-      const chartUrls = [
-        `https://dd.dexscreener.com/ds-data/pairs/solana/${tokenInfo.pairAddress}.png`,
-        `https://dd.dexscreener.com/ds-data/pairs/solana/${tokenInfo.pairAddress}.jpg`,
-        `https://api.dexscreener.com/chart/solana/${tokenInfo.pairAddress}`,
-      ];
-
-      for (const chartUrl of chartUrls) {
-        if (sentWithChart) break;
-
-        try {
+      try {
+        console.log('📸 Attempting to send optimized chart...');
+        
+        // Try with Sharp optimization first
+        const chartBuffer = await getOptimizedChartImage(tokenInfo.pairAddress);
+        
+        if (chartBuffer) {
           await ctx.replyWithPhoto(
-            { url: chartUrl },
+            { source: chartBuffer },
             {
               caption: message,
               parse_mode: "Markdown",
@@ -98,14 +192,41 @@ export async function handleTokenAddressMessage(
 
           await ctx.deleteMessage(loadingMsg.message_id);
           sentWithChart = true;
-        } catch (error: any) {
-          console.log(`Chart failed: ${error.message}`);
+          console.log('✅ Chart sent successfully with optimization');
+        }
+        
+      } catch (chartError: any) {
+        console.error(`❌ Optimized chart send failed:`, chartError.message);
+        
+        // ===== FALLBACK: Try simple small URLs =====
+        try {
+          console.log('📸 Trying simple chart URLs...');
+          const simpleUrl = await getSimpleChartUrl(tokenInfo.pairAddress);
+          
+          if (simpleUrl) {
+            await ctx.replyWithPhoto(
+              { url: simpleUrl },
+              {
+                caption: message,
+                parse_mode: "Markdown",
+                ...getEnhancedTokenMenu(text, tokenInfo, userId),
+              }
+            );
+
+            await ctx.deleteMessage(loadingMsg.message_id);
+            sentWithChart = true;
+            console.log('✅ Chart sent with simple URL');
+          }
+        } catch (simpleError: any) {
+          console.error(`❌ Simple chart also failed:`, simpleError.message);
         }
       }
     }
 
-    // If chart failed, send text with link preview
+    // ===== FINAL FALLBACK: TEXT WITH PREVIEW LINK =====
     if (!sentWithChart) {
+      console.log('📝 Sending text-only version with preview...');
+      
       await ctx.telegram.editMessageText(
         ctx.chat!.id,
         loadingMsg.message_id,
@@ -115,7 +236,7 @@ export async function handleTokenAddressMessage(
           parse_mode: "Markdown",
           link_preview_options: {
             is_disabled: false,
-            url: `https://mevx.io/solana/${text}`,
+            url: tokenInfo.dexscreenerUrl || `https://dexscreener.com/solana/${text}`,
             prefer_large_media: true,
             show_above_text: true,
           },
@@ -125,9 +246,16 @@ export async function handleTokenAddressMessage(
     }
 
     return true;
+    
   } catch (error) {
     console.error("Token display error:", error);
-    await ctx.reply("❌ Error fetching token information.");
+    await ctx.reply(
+      "❌ Error fetching token information.\n\n" +
+      "This could be due to:\n" +
+      "• Network issues\n" +
+      "• Invalid token address\n" +
+      "• Token not listed on any DEX"
+    );
     return true;
   }
 }

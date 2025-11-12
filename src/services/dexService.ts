@@ -3,6 +3,10 @@ import {
   PublicKey,
   Keypair,
   VersionedTransaction,
+  Transaction,
+  SystemProgram,
+  sendAndConfirmTransaction,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import axios from "axios";
 import bs58 from "bs58";
@@ -172,6 +176,45 @@ export class SolanaDEXService {
       return null;
     }
   }
+
+  async transferSOL(
+  senderPrivateKey: string,
+  recipientAddress: string,
+  amountSOL: number
+): Promise<string | null> {
+  try {
+    console.log(`💸 Transferring ${amountSOL} SOL to ${recipientAddress}`);
+    
+    const sender = Keypair.fromSecretKey(bs58.decode(senderPrivateKey));
+    const recipient = new PublicKey(recipientAddress);
+    const lamports = Math.floor(amountSOL * LAMPORTS_PER_SOL);
+    
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: sender.publicKey,
+        toPubkey: recipient,
+        lamports,
+      })
+    );
+    
+    const { blockhash } = await this.connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = sender.publicKey;
+    
+    const signature = await sendAndConfirmTransaction(
+      this.connection,
+      transaction,
+      [sender],
+      { commitment: 'confirmed', maxRetries: 3 }
+    );
+    
+    console.log(`✅ Transfer successful: ${signature}`);
+    return signature;
+  } catch (error: any) {
+    console.error("❌ SOL transfer failed:", error.message);
+    return null;
+  }
+}
 
   async getComprehensiveTokenInfo(tokenAddress: string) {
     try {

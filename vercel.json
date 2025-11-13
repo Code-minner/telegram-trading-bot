@@ -1,5 +1,17 @@
 {
   "version": 2,
+  "builds": [
+    {
+      "src": "api/bot.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    }
+  ],
   "functions": {
     "api/bot.ts": {
       "maxDuration": 10,
@@ -8,16 +20,5 @@
   },
   "env": {
     "NODE_OPTIONS": "--dns-result-order=ipv4first"
-  },
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store, max-age=0"
-        }
-      ]
-    }
-  ]
+  }
 }

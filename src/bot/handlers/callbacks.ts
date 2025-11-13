@@ -739,16 +739,13 @@ export async function handleConfirmBuy(
   const chatId = ctx.chat.id;
   const amount = parseFloat(solAmount);
 
-  // Answer callback FIRST
   await ctx.answerCbQuery("Processing trade...");
 
-  // Show loading message and get message ID properly
   const loadingMessage = await ctx.editMessageText(
     "⏳ *Executing Trade...*\n\nThis may take 10-15 seconds.\n\n🔄 Processing...",
     { parse_mode: "Markdown" }
   );
 
-  // Extract message_id safely
   const messageId =
     typeof loadingMessage !== "boolean" && "message_id" in loadingMessage
       ? loadingMessage.message_id
@@ -759,7 +756,7 @@ export async function handleConfirmBuy(
     return;
   }
 
-  // Process async without blocking
+  // Process async
   setTimeout(async () => {
     try {
       const user = await userService.getUserByTelegramId(userId);
@@ -796,6 +793,36 @@ export async function handleConfirmBuy(
         throw new Error("Token not available");
       }
 
+      // CHECK IF TOKEN IS ON PUMP.FUN
+      const isPumpFun = tokenInfo.dex?.toLowerCase().includes('pump') || 
+                        tokenInfo.exchange?.toLowerCase().includes('pump');
+
+      if (isPumpFun) {
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          `⚠️ *Pump.fun Token Detected*\n\n` +
+            `This token is on Pump.fun and cannot be traded via Jupiter DEX yet.\n\n` +
+            `*Options:*\n` +
+            `1. Wait for token to "graduate" to Raydium\n` +
+            `2. Trade directly on pump.fun\n` +
+            `3. Try a different token\n\n` +
+            `Token: ${tokenInfo.symbol}\n` +
+            `Liquidity: $${tokenInfo.liquidity?.toFixed(2) || 'N/A'}`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🔗 View on Pump.fun", url: `https://pump.fun/${tokenAddress}` }],
+                [{ text: "« Back", callback_data: "menu_memecoins" }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+
       // Validate liquidity
       if (tokenInfo.liquidity && tokenInfo.liquidity < 1000) {
         await ctx.telegram.editMessageText(
@@ -823,7 +850,7 @@ export async function handleConfirmBuy(
         return;
       }
 
-      // Calculate 0.5% fee
+      // Calculate fee
       const FEE_PERCENTAGE = 0.005;
       const feeAmount = amount * FEE_PERCENTAGE;
       const tradingAmount = amount - feeAmount;
@@ -832,14 +859,13 @@ export async function handleConfirmBuy(
         `💰 Trade: ${amount} SOL | Fee: ${feeAmount} SOL | Trading: ${tradingAmount} SOL`
       );
 
-      // Execute swap with retries
+      // Execute swap with timeout
       let result;
       let retryCount = 0;
       const maxRetries = 2;
 
       while (retryCount <= maxRetries) {
         try {
-          // Update progress
           await ctx.telegram.editMessageText(
             chatId,
             messageId,
@@ -864,6 +890,11 @@ export async function handleConfirmBuy(
             swapError.message
           );
 
+          // Check for specific errors
+          if (swapError.message.includes('not be tradeable')) {
+            throw new Error('This token is not available on Jupiter DEX. It may be a Pump.fun token or have no liquidity.');
+          }
+
           if (retryCount === maxRetries) {
             throw new Error(
               swapError.message.includes("insufficient")
@@ -885,30 +916,24 @@ export async function handleConfirmBuy(
         throw new Error("Swap failed after multiple attempts");
       }
 
-      // ===== COLLECT 0.5% FEE =====
+      // Collect fee
       let feeSignature: string | null = null;
       if (feeAmount > 0.0001) {
         try {
           const FEE_WALLET = process.env.FEE_COLLECTION_WALLET;
-
-          // Check if fee wallet is configured
+          
           if (!FEE_WALLET) {
-            console.warn(
-              "⚠️ FEE_COLLECTION_WALLET not configured, skipping fee collection"
-            );
+            console.warn('⚠️ FEE_COLLECTION_WALLET not configured');
           } else {
             feeSignature = await dexService.transferSOL(
-              privateKey, // User's wallet (sending fee)
-              FEE_WALLET, // YOUR wallet (receiving fee)
-              feeAmount // 0.5% fee
+              privateKey,
+              FEE_WALLET,
+              feeAmount
             );
-            console.log(
-              `✅ Fee collected: ${feeAmount} SOL - Signature: ${feeSignature}`
-            );
+            console.log(`✅ Fee collected: ${feeAmount} SOL - Signature: ${feeSignature}`);
           }
         } catch (feeError: any) {
-          console.error("⚠️ Fee collection failed:", feeError.message);
-          // Don't fail the trade if fee collection fails
+          console.error('⚠️ Fee collection failed:', feeError.message);
         }
       }
 
@@ -954,7 +979,9 @@ export async function handleConfirmBuy(
 
       let errorMessage = "❌ *Trade Failed*\n\n";
 
-      if (error.message.includes("Wallet not found")) {
+      if (error.message.includes("Pump.fun") || error.message.includes("not available on Jupiter")) {
+        errorMessage += `🚫 Token Not Tradeable\n\n${error.message}`;
+      } else if (error.message.includes("Wallet not found")) {
         errorMessage += `🔐 Wallet Issue\n\nReconnect: /wallet`;
       } else if (error.message.includes("insufficient")) {
         errorMessage += `💰 Insufficient Balance\n\n${error.message}`;
@@ -975,15 +1002,13 @@ export async function handleConfirmBuy(
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
-              [{ text: "🔄 Retry", callback_data: `memebuy_${tokenAddress}` }],
-              [{ text: "💰 Balance", callback_data: "meme_balance" }],
               [{ text: "« Back", callback_data: "menu_memecoins" }],
             ],
           },
         }
       );
     }
-  }, 100); // Process after 100ms
+  }, 100);
 }
 
 // Add force confirm handler for low liquidity

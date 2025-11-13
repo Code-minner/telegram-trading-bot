@@ -13,7 +13,7 @@ import bs58 from "bs58";
 
 const SOLANA_RPC =
   process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-const JUPITER_API = "https://quote-api.jup.ag/v6";
+const JUPITER_API = "https://api.jup.ag/swap/v6";
 const DEXSCREENER_API = "https://api.dexscreener.com/latest/dex";
 const BIRDEYE_API = "https://public-api.birdeye.so/defi";
 
@@ -35,6 +35,7 @@ export interface TokenInfo {
   dexscreenerUrl?: string;
   pairAddress?: string;
   exchange?: string;
+  dex?: string;
 }
 
 export interface SwapQuote {

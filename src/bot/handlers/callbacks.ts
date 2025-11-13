@@ -733,18 +733,27 @@ export async function handleConfirmBuy(
   tokenAddress: string,
   solAmount: string
 ) {
-  if (!ctx.from || !ctx.chat) return;
+  console.log('🔥 handleConfirmBuy STARTED', { tokenAddress, solAmount });
+  
+  if (!ctx.from || !ctx.chat) {
+    console.log('❌ No ctx.from or ctx.chat');
+    return;
+  }
 
   const userId = ctx.from.id;
   const chatId = ctx.chat.id;
   const amount = parseFloat(solAmount);
 
+  console.log('📊 User info:', { userId, chatId, amount });
+
   await ctx.answerCbQuery("Processing trade...");
+  console.log('✅ Answered callback query');
 
   const loadingMessage = await ctx.editMessageText(
     "⏳ *Executing Trade...*\n\nThis may take 10-15 seconds.\n\n🔄 Processing...",
     { parse_mode: "Markdown" }
   );
+  console.log('✅ Sent loading message');
 
   const messageId =
     typeof loadingMessage !== "boolean" && "message_id" in loadingMessage
@@ -752,252 +761,41 @@ export async function handleConfirmBuy(
       : undefined;
 
   if (!messageId) {
-    console.error("Failed to get message ID");
+    console.error("❌ Failed to get message ID");
     return;
   }
 
-  // Process async
-  setTimeout(async () => {
-    try {
-      const user = await userService.getUserByTelegramId(userId);
-      if (!user) throw new Error("User not found");
+  console.log('📝 Message ID:', messageId);
 
-      const privateKey = await userService.getDecryptedSolanaWalletNew(userId);
-      if (!privateKey) throw new Error("Wallet not found");
+  // CRITICAL: Don't use setTimeout - execute immediately
+  try {
+    console.log('🚀 Starting trade execution...');
+    
+    const user = await userService.getUserByTelegramId(userId);
+    console.log('✅ Got user:', user ? 'Found' : 'Not found');
+    
+    if (!user) throw new Error("User not found");
 
-      const balance = await dexService.getWalletBalance(privateKey);
-      const requiredAmount = amount * 1.02;
+    const privateKey = await userService.getDecryptedSolanaWalletNew(userId);
+    console.log('✅ Got private key:', privateKey ? 'Found' : 'Not found');
+    
+    if (!privateKey) throw new Error("Wallet not found");
 
-      if (balance < requiredAmount) {
-        await ctx.telegram.editMessageText(
-          chatId,
-          messageId,
-          undefined,
-          `❌ *Insufficient Balance*\n\n` +
-            `Available: ${balance.toFixed(4)} SOL\n` +
-            `Required: ${amount} SOL + fees`,
-          {
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "« Back", callback_data: "menu_memecoins" }],
-              ],
-            },
-          }
-        );
-        return;
-      }
+    console.log('💰 Checking balance...');
+    const balance = await dexService.getWalletBalance(privateKey);
+    console.log('✅ Balance:', balance);
+    
+    const requiredAmount = amount * 1.02;
 
-      const tokenInfo = await dexService.getTokenInfo(tokenAddress);
-      if (!tokenInfo || !tokenInfo.price) {
-        throw new Error("Token not available");
-      }
-
-      // CHECK IF TOKEN IS ON PUMP.FUN
-      const isPumpFun = tokenInfo.dex?.toLowerCase().includes('pump') || 
-                        tokenInfo.exchange?.toLowerCase().includes('pump');
-
-      if (isPumpFun) {
-        await ctx.telegram.editMessageText(
-          chatId,
-          messageId,
-          undefined,
-          `⚠️ *Pump.fun Token Detected*\n\n` +
-            `This token is on Pump.fun and cannot be traded via Jupiter DEX yet.\n\n` +
-            `*Options:*\n` +
-            `1. Wait for token to "graduate" to Raydium\n` +
-            `2. Trade directly on pump.fun\n` +
-            `3. Try a different token\n\n` +
-            `Token: ${tokenInfo.symbol}\n` +
-            `Liquidity: $${tokenInfo.liquidity?.toFixed(2) || 'N/A'}`,
-          {
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "🔗 View on Pump.fun", url: `https://pump.fun/${tokenAddress}` }],
-                [{ text: "« Back", callback_data: "menu_memecoins" }]
-              ]
-            }
-          }
-        );
-        return;
-      }
-
-      // Validate liquidity
-      if (tokenInfo.liquidity && tokenInfo.liquidity < 1000) {
-        await ctx.telegram.editMessageText(
-          chatId,
-          messageId,
-          undefined,
-          `⚠️ *Low Liquidity Warning*\n\n` +
-            `Liquidity: $${tokenInfo.liquidity.toFixed(2)}\n\n` +
-            `Proceed anyway?`,
-          {
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "✅ Continue",
-                    callback_data: `forceconfirm_buy_${tokenAddress}_${amount}`,
-                  },
-                  { text: "❌ Cancel", callback_data: "menu_memecoins" },
-                ],
-              ],
-            },
-          }
-        );
-        return;
-      }
-
-      // Calculate fee
-      const FEE_PERCENTAGE = 0.005;
-      const feeAmount = amount * FEE_PERCENTAGE;
-      const tradingAmount = amount - feeAmount;
-
-      console.log(
-        `💰 Trade: ${amount} SOL | Fee: ${feeAmount} SOL | Trading: ${tradingAmount} SOL`
-      );
-
-      // Execute swap with timeout
-      let result;
-      let retryCount = 0;
-      const maxRetries = 2;
-
-      while (retryCount <= maxRetries) {
-        try {
-          await ctx.telegram.editMessageText(
-            chatId,
-            messageId,
-            undefined,
-            `⏳ *Executing Trade...*\n\n🔄 Attempt ${retryCount + 1}/${
-              maxRetries + 1
-            }\n\nPlease wait...`,
-            { parse_mode: "Markdown" }
-          );
-
-          result = await dexService.buyMemecoin(
-            privateKey,
-            tokenAddress,
-            tradingAmount,
-            1
-          );
-
-          if (result) break;
-        } catch (swapError: any) {
-          console.error(
-            `Swap attempt ${retryCount + 1} failed:`,
-            swapError.message
-          );
-
-          // Check for specific errors
-          if (swapError.message.includes('not be tradeable')) {
-            throw new Error('This token is not available on Jupiter DEX. It may be a Pump.fun token or have no liquidity.');
-          }
-
-          if (retryCount === maxRetries) {
-            throw new Error(
-              swapError.message.includes("insufficient")
-                ? "Insufficient SOL for transaction"
-                : swapError.message.includes("slippage")
-                ? "Price moved too much"
-                : swapError.message.includes("liquidity")
-                ? "Insufficient liquidity"
-                : `Swap failed: ${swapError.message}`
-            );
-          }
-
-          retryCount++;
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-      }
-
-      if (!result) {
-        throw new Error("Swap failed after multiple attempts");
-      }
-
-      // Collect fee
-      let feeSignature: string | null = null;
-      if (feeAmount > 0.0001) {
-        try {
-          const FEE_WALLET = process.env.FEE_COLLECTION_WALLET;
-          
-          if (!FEE_WALLET) {
-            console.warn('⚠️ FEE_COLLECTION_WALLET not configured');
-          } else {
-            feeSignature = await dexService.transferSOL(
-              privateKey,
-              FEE_WALLET,
-              feeAmount
-            );
-            console.log(`✅ Fee collected: ${feeAmount} SOL - Signature: ${feeSignature}`);
-          }
-        } catch (feeError: any) {
-          console.error('⚠️ Fee collection failed:', feeError.message);
-        }
-      }
-
-      // Save trade
-      await tradeService.createMemecoinTrade(
-        user.id,
-        userId,
-        tokenAddress,
-        tokenInfo.symbol,
-        tokenInfo.decimals,
-        "buy",
-        tradingAmount,
-        tokenInfo.price || 0,
-        "jupiter",
-        1
-      );
-
-      // Success message
+    if (balance < requiredAmount) {
+      console.log('❌ Insufficient balance');
       await ctx.telegram.editMessageText(
         chatId,
         messageId,
         undefined,
-        `✅ *Trade Successful!*\n\n` +
-          `Token: *${tokenInfo.symbol}*\n` +
-          `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
-          `Fee (0.5%): ${feeAmount.toFixed(4)} SOL\n` +
-          `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n` +
-          `Price: $${tokenInfo.price.toFixed(8)}\n\n` +
-          `🔗 \`${result.signature}\`\n\n` +
-          `🤖 Auto TP/SL: ENABLED`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "📊 Positions", callback_data: "meme_positions" }],
-              [{ text: "🏠 Main Menu", callback_data: "back_main" }],
-            ],
-          },
-        }
-      );
-    } catch (error: any) {
-      console.error("Buy error:", error);
-
-      let errorMessage = "❌ *Trade Failed*\n\n";
-
-      if (error.message.includes("Pump.fun") || error.message.includes("not available on Jupiter")) {
-        errorMessage += `🚫 Token Not Tradeable\n\n${error.message}`;
-      } else if (error.message.includes("Wallet not found")) {
-        errorMessage += `🔐 Wallet Issue\n\nReconnect: /wallet`;
-      } else if (error.message.includes("insufficient")) {
-        errorMessage += `💰 Insufficient Balance\n\n${error.message}`;
-      } else if (error.message.includes("slippage")) {
-        errorMessage += `📊 Slippage Issue\n\n${error.message}`;
-      } else if (error.message.includes("liquidity")) {
-        errorMessage += `💧 Liquidity Issue\n\n${error.message}`;
-      } else {
-        errorMessage += `Error: ${error.message}`;
-      }
-
-      await ctx.telegram.editMessageText(
-        chatId,
-        messageId,
-        undefined,
-        errorMessage,
+        `❌ *Insufficient Balance*\n\n` +
+          `Available: ${balance.toFixed(4)} SOL\n` +
+          `Required: ${amount} SOL + fees`,
         {
           parse_mode: "Markdown",
           reply_markup: {
@@ -1007,9 +805,165 @@ export async function handleConfirmBuy(
           },
         }
       );
+      return;
     }
-  }, 100);
+
+    console.log('📊 Getting token info...');
+    const tokenInfo = await dexService.getTokenInfo(tokenAddress);
+    console.log('✅ Token info:', tokenInfo ? JSON.stringify(tokenInfo) : 'Not found');
+    
+    if (!tokenInfo || !tokenInfo.price) {
+      throw new Error("Token not available");
+    }
+
+    // Check if Pump.fun
+    const isPumpFun = 
+      tokenInfo.dex?.toLowerCase().includes('pump') || 
+      tokenInfo.exchange?.toLowerCase().includes('pump');
+
+    console.log('🔍 Is Pump.fun?', isPumpFun);
+
+    if (isPumpFun) {
+      console.log('⚠️ Pump.fun token detected, aborting');
+      await ctx.telegram.editMessageText(
+        chatId,
+        messageId,
+        undefined,
+        `⚠️ *Pump.fun Token*\n\n` +
+          `Cannot trade Pump.fun tokens via Jupiter.\n\n` +
+          `Token: ${tokenInfo.symbol}\n` +
+          `Exchange: ${tokenInfo.exchange}`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "« Back", callback_data: "menu_memecoins" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    console.log('💸 Calculating fees...');
+    const FEE_PERCENTAGE = 0.005;
+    const feeAmount = amount * FEE_PERCENTAGE;
+    const tradingAmount = amount - feeAmount;
+    console.log('✅ Fee calculation:', { amount, feeAmount, tradingAmount });
+
+    console.log('🔄 Attempting Jupiter swap...');
+    
+    // Update message before swap
+    await ctx.telegram.editMessageText(
+      chatId,
+      messageId,
+      undefined,
+      `⏳ *Executing Swap on Jupiter...*\n\n` +
+      `Token: ${tokenInfo.symbol}\n` +
+      `Amount: ${tradingAmount.toFixed(4)} SOL\n\n` +
+      `⚠️ This may take 15-30 seconds...`,
+      { parse_mode: "Markdown" }
+    );
+
+    let result;
+    try {
+      result = await dexService.buyMemecoin(
+        privateKey,
+        tokenAddress,
+        tradingAmount,
+        1
+      );
+      console.log('✅ Swap result:', result ? 'Success' : 'Failed');
+    } catch (swapError: any) {
+      console.error('❌ Swap error:', swapError.message);
+      throw swapError;
+    }
+
+    if (!result) {
+      throw new Error("Swap failed - Jupiter returned no result");
+    }
+
+    console.log('💰 Collecting fee...');
+    // Fee collection
+    const FEE_WALLET = process.env.FEE_COLLECTION_WALLET;
+    if (FEE_WALLET && feeAmount > 0.0001) {
+      try {
+        const feeSignature = await dexService.transferSOL(
+          privateKey,
+          FEE_WALLET,
+          feeAmount
+        );
+        console.log('✅ Fee collected:', feeSignature);
+      } catch (feeError: any) {
+        console.error('⚠️ Fee collection failed:', feeError.message);
+      }
+    }
+
+    console.log('💾 Saving trade to database...');
+    await tradeService.createMemecoinTrade(
+      user.id,
+      userId,
+      tokenAddress,
+      tokenInfo.symbol,
+      tokenInfo.decimals,
+      "buy",
+      tradingAmount,
+      tokenInfo.price || 0,
+      "jupiter",
+      1
+    );
+    console.log('✅ Trade saved');
+
+    console.log('📤 Sending success message...');
+    await ctx.telegram.editMessageText(
+      chatId,
+      messageId,
+      undefined,
+      `✅ *Trade Successful!*\n\n` +
+        `Token: *${tokenInfo.symbol}*\n` +
+        `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
+        `Fee: ${feeAmount.toFixed(4)} SOL\n` +
+        `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n\n` +
+        `🔗 \`${result.signature}\`\n\n` +
+        `🤖 Auto TP/SL: ENABLED`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📊 Positions", callback_data: "meme_positions" }],
+            [{ text: "🏠 Main Menu", callback_data: "back_main" }],
+          ],
+        },
+      }
+    );
+    console.log('✅ handleConfirmBuy COMPLETED');
+
+  } catch (error: any) {
+    console.error("❌ TRADE FAILED:", error);
+    console.error("❌ Error stack:", error.stack);
+
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        messageId,
+        undefined,
+        `❌ *Trade Failed*\n\n${error.message}\n\n` +
+        `Please check logs or try again.`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "« Back", callback_data: "menu_memecoins" }],
+            ],
+          },
+        }
+      );
+    } catch (msgError) {
+      console.error("❌ Failed to send error message:", msgError);
+    }
+  }
 }
+
 
 // Add force confirm handler for low liquidity
 export async function handleForceConfirmBuy(

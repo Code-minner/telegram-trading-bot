@@ -12,8 +12,8 @@ import {
   showWalletSelection,
   showTokenSettings,
 } from "../features/tokenDisplay";
-import { handleWalletCallbacks } from './walletCallbacks';
-import * as cexHandlers from './cexHandlers';
+import { handleWalletCallbacks } from "./walletCallbacks";
+import * as cexHandlers from "./cexHandlers";
 
 // Store user states for multi-step operations
 export const userStates = new Map<number, any>();
@@ -31,17 +31,17 @@ export async function handleCloseMenu(ctx: Context) {
 export async function handleComingSoon(ctx: Context, feature: string) {
   await ctx.editMessageText(
     `🚧 *${feature}*\n\n` +
-    `This feature is coming soon!\n\n` +
-    `We're working hard to bring you:\n` +
-    `• Advanced trading tools\n` +
-    `• More features\n` +
-    `• Better experience\n\n` +
-    `Stay tuned! 🚀`,
+      `This feature is coming soon!\n\n` +
+      `We're working hard to bring you:\n` +
+      `• Advanced trading tools\n` +
+      `• More features\n` +
+      `• Better experience\n\n` +
+      `Stay tuned! 🚀`,
     {
-      parse_mode: 'Markdown',
+      parse_mode: "Markdown",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('🏠 Main Menu', 'back_main')]
-      ])
+        [Markup.button.callback("🏠 Main Menu", "back_main")],
+      ]),
     }
   );
 }
@@ -50,26 +50,26 @@ export async function handleComingSoon(ctx: Context, feature: string) {
 export async function handleConnectMenu(ctx: Context) {
   await ctx.editMessageText(
     `🔐 *Connect Exchange*\n\n` +
-    `Connect your CEX to start trading crypto.\n\n` +
-    `*How to Connect:*\n` +
-    `Use the command:\n` +
-    `\`/connect <exchange> <api_key> <api_secret>\`\n\n` +
-    `*Example:*\n` +
-    `\`/connect bybit YOUR_KEY YOUR_SECRET\`\n\n` +
-    `*Supported Exchanges:*\n` +
-    `• Bybit (recommended)\n` +
-    `• Binance\n` +
-    `• OKX\n` +
-    `• KuCoin\n` +
-    `• Gate.io\n` +
-    `• Bitget\n\n` +
-    `⚠️ *Important:* Enable trading permissions on your API keys!`,
+      `Connect your CEX to start trading crypto.\n\n` +
+      `*How to Connect:*\n` +
+      `Use the command:\n` +
+      `\`/connect <exchange> <api_key> <api_secret>\`\n\n` +
+      `*Example:*\n` +
+      `\`/connect bybit YOUR_KEY YOUR_SECRET\`\n\n` +
+      `*Supported Exchanges:*\n` +
+      `• Bybit (recommended)\n` +
+      `• Binance\n` +
+      `• OKX\n` +
+      `• KuCoin\n` +
+      `• Gate.io\n` +
+      `• Bitget\n\n` +
+      `⚠️ *Important:* Enable trading permissions on your API keys!`,
     {
-      parse_mode: 'Markdown',
+      parse_mode: "Markdown",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('📚 How to Get API Keys', 'help_api_keys')],
-        [Markup.button.callback('« Back', 'back_main')]
-      ])
+        [Markup.button.callback("📚 How to Get API Keys", "help_api_keys")],
+        [Markup.button.callback("« Back", "back_main")],
+      ]),
     }
   );
 }
@@ -78,27 +78,27 @@ export async function handleConnectMenu(ctx: Context) {
 export async function handleHelpApiKeys(ctx: Context) {
   await ctx.editMessageText(
     `📚 *How to Get API Keys*\n\n` +
-    `**Bybit:**\n` +
-    `1. Go to Account & Security\n` +
-    `2. API Management\n` +
-    `3. Create New Key\n` +
-    `4. Enable "Trade" permission\n` +
-    `5. Save your keys securely\n\n` +
-    `**Binance:**\n` +
-    `1. Go to Profile → API Management\n` +
-    `2. Create API\n` +
-    `3. Enable "Spot & Margin Trading"\n` +
-    `4. Save keys\n\n` +
-    `⚠️ *Security Tips:*\n` +
-    `• Never share your secret key\n` +
-    `• Enable IP whitelist if possible\n` +
-    `• Only enable trading permission\n` +
-    `• Use a dedicated trading account`,
+      `**Bybit:**\n` +
+      `1. Go to Account & Security\n` +
+      `2. API Management\n` +
+      `3. Create New Key\n` +
+      `4. Enable "Trade" permission\n` +
+      `5. Save your keys securely\n\n` +
+      `**Binance:**\n` +
+      `1. Go to Profile → API Management\n` +
+      `2. Create API\n` +
+      `3. Enable "Spot & Margin Trading"\n` +
+      `4. Save keys\n\n` +
+      `⚠️ *Security Tips:*\n` +
+      `• Never share your secret key\n` +
+      `• Enable IP whitelist if possible\n` +
+      `• Only enable trading permission\n` +
+      `• Use a dedicated trading account`,
     {
-      parse_mode: 'Markdown',
+      parse_mode: "Markdown",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('« Back', 'menu_connect')]
-      ])
+        [Markup.button.callback("« Back", "menu_connect")],
+      ]),
     }
   );
 }
@@ -556,22 +556,24 @@ export async function handleBackToMain(ctx: Context) {
   if (!ctx.from) return;
 
   const userId = ctx.from.id;
-  
+
   const connectionStatus = await userService.getConnectionStatus(userId);
   const walletDetails = await userService.getWalletDetails(userId);
-  
-  let statusText = '';
-  
+
+  let statusText = "";
+
   if (connectionStatus.hasCEX) {
     statusText += `🟢 CEX: ${connectionStatus.exchange?.toUpperCase()}\n`;
   } else {
     statusText += `🔴 CEX: Not Connected\n`;
   }
-  
+
   if (walletDetails?.connected) {
     statusText += `🟢 DEX: Connected\n`;
     if (walletDetails.walletCount > 0) {
-      statusText += `💼 ${walletDetails.walletCount} wallet${walletDetails.walletCount > 1 ? 's' : ''}`;
+      statusText += `💼 ${walletDetails.walletCount} wallet${
+        walletDetails.walletCount > 1 ? "s" : ""
+      }`;
       if (walletDetails.totalBalance > 0) {
         statusText += ` | 💰 ${walletDetails.totalBalance.toFixed(4)} SOL`;
       }
@@ -582,9 +584,7 @@ export async function handleBackToMain(ctx: Context) {
   }
 
   await ctx.editMessageText(
-    `🤖 *Advanced Trading Bot*\n\n` +
-    `${statusText}\n` +
-    `Select an option:`,
+    `🤖 *Advanced Trading Bot*\n\n` + `${statusText}\n` + `Select an option:`,
     {
       parse_mode: "Markdown",
       ...menus.getMainMenu(),
@@ -741,20 +741,21 @@ export async function handleConfirmBuy(
 
   // Answer callback FIRST
   await ctx.answerCbQuery("Processing trade...");
-  
+
   // Show loading message and get message ID properly
   const loadingMessage = await ctx.editMessageText(
-    "⏳ *Executing Trade...*\n\nThis may take 10-15 seconds.\n\n🔄 Processing...", 
+    "⏳ *Executing Trade...*\n\nThis may take 10-15 seconds.\n\n🔄 Processing...",
     { parse_mode: "Markdown" }
   );
 
   // Extract message_id safely
-  const messageId = typeof loadingMessage !== 'boolean' && 'message_id' in loadingMessage 
-    ? loadingMessage.message_id 
-    : undefined;
+  const messageId =
+    typeof loadingMessage !== "boolean" && "message_id" in loadingMessage
+      ? loadingMessage.message_id
+      : undefined;
 
   if (!messageId) {
-    console.error('Failed to get message ID');
+    console.error("Failed to get message ID");
     return;
   }
 
@@ -769,22 +770,22 @@ export async function handleConfirmBuy(
 
       const balance = await dexService.getWalletBalance(privateKey);
       const requiredAmount = amount * 1.02;
-      
+
       if (balance < requiredAmount) {
         await ctx.telegram.editMessageText(
           chatId,
           messageId,
           undefined,
           `❌ *Insufficient Balance*\n\n` +
-          `Available: ${balance.toFixed(4)} SOL\n` +
-          `Required: ${amount} SOL + fees`,
+            `Available: ${balance.toFixed(4)} SOL\n` +
+            `Required: ${amount} SOL + fees`,
           {
             parse_mode: "Markdown",
             reply_markup: {
-              inline_keyboard: [[
-                { text: "« Back", callback_data: "menu_memecoins" }
-              ]]
-            }
+              inline_keyboard: [
+                [{ text: "« Back", callback_data: "menu_memecoins" }],
+              ],
+            },
           }
         );
         return;
@@ -802,16 +803,21 @@ export async function handleConfirmBuy(
           messageId,
           undefined,
           `⚠️ *Low Liquidity Warning*\n\n` +
-          `Liquidity: $${tokenInfo.liquidity.toFixed(2)}\n\n` +
-          `Proceed anyway?`,
+            `Liquidity: $${tokenInfo.liquidity.toFixed(2)}\n\n` +
+            `Proceed anyway?`,
           {
             parse_mode: "Markdown",
             reply_markup: {
-              inline_keyboard: [[
-                { text: "✅ Continue", callback_data: `forceconfirm_buy_${tokenAddress}_${amount}` },
-                { text: "❌ Cancel", callback_data: "menu_memecoins" }
-              ]]
-            }
+              inline_keyboard: [
+                [
+                  {
+                    text: "✅ Continue",
+                    callback_data: `forceconfirm_buy_${tokenAddress}_${amount}`,
+                  },
+                  { text: "❌ Cancel", callback_data: "menu_memecoins" },
+                ],
+              ],
+            },
           }
         );
         return;
@@ -822,7 +828,9 @@ export async function handleConfirmBuy(
       const feeAmount = amount * FEE_PERCENTAGE;
       const tradingAmount = amount - feeAmount;
 
-      console.log(`💰 Trade: ${amount} SOL | Fee: ${feeAmount} SOL | Trading: ${tradingAmount} SOL`);
+      console.log(
+        `💰 Trade: ${amount} SOL | Fee: ${feeAmount} SOL | Trading: ${tradingAmount} SOL`
+      );
 
       // Execute swap with retries
       let result;
@@ -836,7 +844,9 @@ export async function handleConfirmBuy(
             chatId,
             messageId,
             undefined,
-            `⏳ *Executing Trade...*\n\n🔄 Attempt ${retryCount + 1}/${maxRetries + 1}\n\nPlease wait...`,
+            `⏳ *Executing Trade...*\n\n🔄 Attempt ${retryCount + 1}/${
+              maxRetries + 1
+            }\n\nPlease wait...`,
             { parse_mode: "Markdown" }
           );
 
@@ -848,21 +858,26 @@ export async function handleConfirmBuy(
           );
 
           if (result) break;
-
         } catch (swapError: any) {
-          console.error(`Swap attempt ${retryCount + 1} failed:`, swapError.message);
-          
+          console.error(
+            `Swap attempt ${retryCount + 1} failed:`,
+            swapError.message
+          );
+
           if (retryCount === maxRetries) {
             throw new Error(
-              swapError.message.includes('insufficient') ? 'Insufficient SOL for transaction' :
-              swapError.message.includes('slippage') ? 'Price moved too much' :
-              swapError.message.includes('liquidity') ? 'Insufficient liquidity' :
-              `Swap failed: ${swapError.message}`
+              swapError.message.includes("insufficient")
+                ? "Insufficient SOL for transaction"
+                : swapError.message.includes("slippage")
+                ? "Price moved too much"
+                : swapError.message.includes("liquidity")
+                ? "Insufficient liquidity"
+                : `Swap failed: ${swapError.message}`
             );
           }
-          
+
           retryCount++;
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
@@ -870,15 +885,30 @@ export async function handleConfirmBuy(
         throw new Error("Swap failed after multiple attempts");
       }
 
-      // Collect fee
+      // ===== COLLECT 0.5% FEE =====
       let feeSignature: string | null = null;
       if (feeAmount > 0.0001) {
         try {
-          const FEE_WALLET = process.env.FEE_COLLECTION_WALLET || "YOUR_FEE_WALLET_ADDRESS";
-          feeSignature = await dexService.transferSOL(privateKey, FEE_WALLET, feeAmount);
-          console.log(`✅ Fee collected: ${feeAmount} SOL`);
+          const FEE_WALLET = process.env.FEE_COLLECTION_WALLET;
+
+          // Check if fee wallet is configured
+          if (!FEE_WALLET) {
+            console.warn(
+              "⚠️ FEE_COLLECTION_WALLET not configured, skipping fee collection"
+            );
+          } else {
+            feeSignature = await dexService.transferSOL(
+              privateKey, // User's wallet (sending fee)
+              FEE_WALLET, // YOUR wallet (receiving fee)
+              feeAmount // 0.5% fee
+            );
+            console.log(
+              `✅ Fee collected: ${feeAmount} SOL - Signature: ${feeSignature}`
+            );
+          }
         } catch (feeError: any) {
-          console.error('⚠️ Fee collection failed:', feeError.message);
+          console.error("⚠️ Fee collection failed:", feeError.message);
+          // Don't fail the trade if fee collection fails
         }
       }
 
@@ -902,29 +932,28 @@ export async function handleConfirmBuy(
         messageId,
         undefined,
         `✅ *Trade Successful!*\n\n` +
-        `Token: *${tokenInfo.symbol}*\n` +
-        `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
-        `Fee (0.5%): ${feeAmount.toFixed(4)} SOL\n` +
-        `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n` +
-        `Price: $${tokenInfo.price.toFixed(8)}\n\n` +
-        `🔗 \`${result.signature}\`\n\n` +
-        `🤖 Auto TP/SL: ENABLED`,
+          `Token: *${tokenInfo.symbol}*\n` +
+          `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
+          `Fee (0.5%): ${feeAmount.toFixed(4)} SOL\n` +
+          `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n` +
+          `Price: $${tokenInfo.price.toFixed(8)}\n\n` +
+          `🔗 \`${result.signature}\`\n\n` +
+          `🤖 Auto TP/SL: ENABLED`,
         {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
               [{ text: "📊 Positions", callback_data: "meme_positions" }],
-              [{ text: "🏠 Main Menu", callback_data: "back_main" }]
-            ]
-          }
+              [{ text: "🏠 Main Menu", callback_data: "back_main" }],
+            ],
+          },
         }
       );
-
     } catch (error: any) {
       console.error("Buy error:", error);
-      
+
       let errorMessage = "❌ *Trade Failed*\n\n";
-      
+
       if (error.message.includes("Wallet not found")) {
         errorMessage += `🔐 Wallet Issue\n\nReconnect: /wallet`;
       } else if (error.message.includes("insufficient")) {
@@ -948,9 +977,9 @@ export async function handleConfirmBuy(
             inline_keyboard: [
               [{ text: "🔄 Retry", callback_data: `memebuy_${tokenAddress}` }],
               [{ text: "💰 Balance", callback_data: "meme_balance" }],
-              [{ text: "« Back", callback_data: "menu_memecoins" }]
-            ]
-          }
+              [{ text: "« Back", callback_data: "menu_memecoins" }],
+            ],
+          },
         }
       );
     }
@@ -1059,9 +1088,9 @@ export async function handleConfirmSell(ctx: Context, tokenAddress: string) {
         `${pnl >= 0 ? "🟢" : "🔴"} P&L: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(
           2
         )}%\n` +
-        `${pnl >= 0 ? "💰" : "💸"} ${
-          pnl >= 0 ? "+" : ""
-        }$${pnlValue.toFixed(2)}\n\n` +
+        `${pnl >= 0 ? "💰" : "💸"} ${pnl >= 0 ? "+" : ""}$${pnlValue.toFixed(
+          2
+        )}\n\n` +
         `🔗 Signature:\n\`${result.signature}\``,
       {
         parse_mode: "Markdown",
@@ -1175,16 +1204,13 @@ export async function handleMemecoinSell(ctx: Context) {
   const hasWallet = await userService.hasDEXConnectionNew(userId);
 
   if (!hasWallet) {
-    await ctx.editMessageText(
-      `❌ *Wallet Not Connected*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
-          [Markup.button.callback("« Back", "menu_memecoins")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *Wallet Not Connected*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
+        [Markup.button.callback("« Back", "menu_memecoins")],
+      ]),
+    });
     return;
   }
 
@@ -1245,16 +1271,13 @@ export async function handleMemecoinTrending(ctx: Context) {
   const tokens = await dexService.searchTokens("BONK");
 
   if (tokens.length === 0) {
-    await ctx.editMessageText(
-      `❌ *No Results*\n\nTry searching manually.`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔍 Search", "meme_search")],
-          [Markup.button.callback("« Back", "menu_memecoins")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *No Results*\n\nTry searching manually.`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🔍 Search", "meme_search")],
+        [Markup.button.callback("« Back", "menu_memecoins")],
+      ]),
+    });
     return;
   }
 
@@ -1288,16 +1311,13 @@ export async function handleMemecoinPositions(ctx: Context) {
   });
 
   if (memeTrades.length === 0) {
-    await ctx.editMessageText(
-      `📊 *No Positions*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("💎 Buy", "meme_buy")],
-          [Markup.button.callback("« Back", "menu_memecoins")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`📊 *No Positions*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("💎 Buy", "meme_buy")],
+        [Markup.button.callback("« Back", "menu_memecoins")],
+      ]),
+    });
     return;
   }
 
@@ -1334,16 +1354,13 @@ export async function handleMemecoinBalance(ctx: Context) {
   const hasWallet = await userService.hasDEXConnectionNew(userId);
 
   if (!hasWallet) {
-    await ctx.editMessageText(
-      `❌ *Wallet Not Connected*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
-          [Markup.button.callback("« Back", "menu_memecoins")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *Wallet Not Connected*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
+        [Markup.button.callback("« Back", "menu_memecoins")],
+      ]),
+    });
     return;
   }
 
@@ -1372,15 +1389,12 @@ export async function handleMemecoinBalance(ctx: Context) {
     );
   } catch (error: any) {
     console.error("Balance error:", error);
-    await ctx.editMessageText(
-      `❌ *Failed*\n\n` + `Error: ${error.message}`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("« Back", "menu_memecoins")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *Failed*\n\n` + `Error: ${error.message}`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("« Back", "menu_memecoins")],
+      ]),
+    });
   }
 }
 
@@ -1417,19 +1431,16 @@ export async function handlePortfolioMenu(ctx: Context) {
   const stats = await tradeService.getPortfolioStats(userId);
 
   if (!stats) {
-    await ctx.editMessageText(
-      `📊 *Portfolio*\n\n` + `No trades yet.`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback("📈 CEX", "menu_buy"),
-            Markup.button.callback("🪙 Memecoins", "menu_memecoins"),
-          ],
-          [Markup.button.callback("« Back", "back_main")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`📊 *Portfolio*\n\n` + `No trades yet.`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback("📈 CEX", "menu_buy"),
+          Markup.button.callback("🪙 Memecoins", "menu_memecoins"),
+        ],
+        [Markup.button.callback("« Back", "back_main")],
+      ]),
+    });
     return;
   }
 
@@ -1465,16 +1476,13 @@ export async function handleBalanceMenu(ctx: Context) {
   const keys = await userService.getDecryptedApiKeys(userId);
 
   if (!keys) {
-    await ctx.editMessageText(
-      `❌ *CEX Not Connected*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔐 Connect", "menu_connect")],
-          [Markup.button.callback("« Back", "back_main")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *CEX Not Connected*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🔐 Connect", "menu_connect")],
+        [Markup.button.callback("« Back", "back_main")],
+      ]),
+    });
     return;
   }
 
@@ -1523,19 +1531,16 @@ export async function handlePositionsMenu(ctx: Context) {
   const trades = await tradeService.getOpenTrades(userId);
 
   if (trades.length === 0) {
-    await ctx.editMessageText(
-      `📊 *No Positions*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback("📈 Buy", "menu_buy"),
-            Markup.button.callback("🪙 Memecoins", "menu_memecoins"),
-          ],
-          [Markup.button.callback("« Back", "back_main")],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`📊 *No Positions*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback("📈 Buy", "menu_buy"),
+          Markup.button.callback("🪙 Memecoins", "menu_memecoins"),
+        ],
+        [Markup.button.callback("« Back", "back_main")],
+      ]),
+    });
     return;
   }
 
@@ -1582,16 +1587,13 @@ export async function handleEnhancedBuy(ctx: Context, tokenAddress: string) {
   const hasWallet = await userService.hasDEXConnectionNew(userId);
 
   if (!hasWallet) {
-    await ctx.editMessageText(
-      `❌ *Wallet Not Connected*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
-          [Markup.button.callback("« Back", `backtotoken_${tokenAddress}`)],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *Wallet Not Connected*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
+        [Markup.button.callback("« Back", `backtotoken_${tokenAddress}`)],
+      ]),
+    });
     return;
   }
 
@@ -1605,16 +1607,13 @@ export async function handleEnhancedSell(ctx: Context, tokenAddress: string) {
   const hasWallet = await userService.hasDEXConnectionNew(userId);
 
   if (!hasWallet) {
-    await ctx.editMessageText(
-      `❌ *Wallet Not Connected*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
-          [Markup.button.callback("« Back", `backtotoken_${tokenAddress}`)],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *Wallet Not Connected*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("🔐 Connect", "meme_connect_wallet")],
+        [Markup.button.callback("« Back", `backtotoken_${tokenAddress}`)],
+      ]),
+    });
     return;
   }
 
@@ -1626,21 +1625,18 @@ export async function handleEnhancedSell(ctx: Context, tokenAddress: string) {
   const trade = trades.find((t) => t.token_address === tokenAddress);
 
   if (!trade) {
-    await ctx.editMessageText(
-      `❌ *No Position*`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback(
-              "🟢 Buy Instead",
-              `enhancedbuy_${tokenAddress}`
-            ),
-          ],
-          [Markup.button.callback("« Back", `backtotoken_${tokenAddress}`)],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *No Position*`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            "🟢 Buy Instead",
+            `enhancedbuy_${tokenAddress}`
+          ),
+        ],
+        [Markup.button.callback("« Back", `backtotoken_${tokenAddress}`)],
+      ]),
+    });
     return;
   }
 
@@ -1794,21 +1790,18 @@ export async function handleExecuteBuy(
     );
   } catch (error: any) {
     console.error("Buy error:", error);
-    await ctx.editMessageText(
-      `❌ *Failed*\n\n` + `${error.message}`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.callback(
-              "🔄 Retry",
-              `quickbuy_${tokenAddress}_${amount}`
-            ),
-          ],
-          [Markup.button.callback("« Back", `enhancedbuy_${tokenAddress}`)],
-        ]),
-      }
-    );
+    await ctx.editMessageText(`❌ *Failed*\n\n` + `${error.message}`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            "🔄 Retry",
+            `quickbuy_${tokenAddress}_${amount}`
+          ),
+        ],
+        [Markup.button.callback("« Back", `enhancedbuy_${tokenAddress}`)],
+      ]),
+    });
   }
 }
 
@@ -1894,30 +1887,42 @@ export async function handleCallback(ctx: Context) {
     if (data === "menu_sell") return cexHandlers.handleSellMenu(ctx);
 
     // CEX Buy pair selection
-    if (data.startsWith("buy_") && !data.includes("custom") && !data.includes("memecoin")) {
+    if (
+      data.startsWith("buy_") &&
+      !data.includes("custom") &&
+      !data.includes("memecoin")
+    ) {
       const symbol = data.replace("buy_", "");
-      return cexHandlers.handlePairSelection(ctx, 'buy', symbol);
+      return cexHandlers.handlePairSelection(ctx, "buy", symbol);
     }
 
-    // CEX Sell pair selection  
-    if (data.startsWith("sell_") && !data.includes("custom") && !data.includes("memecoin")) {
+    // CEX Sell pair selection
+    if (
+      data.startsWith("sell_") &&
+      !data.includes("custom") &&
+      !data.includes("memecoin")
+    ) {
       const symbol = data.replace("sell_", "");
-      return cexHandlers.handlePairSelection(ctx, 'sell', symbol);
+      return cexHandlers.handlePairSelection(ctx, "sell", symbol);
     }
 
     // CEX Amount selection
     if (data.startsWith("amount_")) {
       const parts = data.replace("amount_", "").split("_");
-      const action = parts[0] as 'buy' | 'sell';
+      const action = parts[0] as "buy" | "sell";
       const symbol = parts[1];
       const amount = parts[2];
       return cexHandlers.handleAmountSelection(ctx, action, symbol, amount);
     }
 
     // CEX Confirm trade (handles both buy and sell)
-    if (data.startsWith("confirm_") && !data.includes("buy_") && !data.includes("sell_")) {
+    if (
+      data.startsWith("confirm_") &&
+      !data.includes("buy_") &&
+      !data.includes("sell_")
+    ) {
       const parts = data.split("_");
-      const action = parts[1] as 'buy' | 'sell';
+      const action = parts[1] as "buy" | "sell";
       const symbol = parts[2];
       const amount = parts[3];
       return cexHandlers.handleConfirmTrade(ctx, action, symbol, amount);
@@ -1926,7 +1931,7 @@ export async function handleCallback(ctx: Context) {
     // CEX Custom amount
     if (data.startsWith("custom_")) {
       const parts = data.replace("custom_", "").split("_");
-      const action = parts[0] as 'buy' | 'sell';
+      const action = parts[0] as "buy" | "sell";
       const symbol = parts[1];
       return cexHandlers.handleCustomAmount(ctx, action, symbol);
     }
@@ -1938,7 +1943,7 @@ export async function handleCallback(ctx: Context) {
 
     // Wallets menu
     if (data === "menu_wallets") {
-      const { handleWalletCommand } = require('./walletHandlers');
+      const { handleWalletCommand } = require("./walletHandlers");
       return handleWalletCommand(ctx);
     }
 
@@ -1947,8 +1952,10 @@ export async function handleCallback(ctx: Context) {
     if (data === "menu_copy") return handleComingSoon(ctx, "Copy Trading");
     if (data === "menu_sniper_v1") return handleComingSoon(ctx, "Sniper V1");
     if (data === "menu_sniper_v2") return handleComingSoon(ctx, "Sniper V2");
-    if (data === "menu_sniper_pumpfun") return handleComingSoon(ctx, "Pump Sniper");
-    if (data === "menu_sniper_moonshot") return handleComingSoon(ctx, "Moonshot");
+    if (data === "menu_sniper_pumpfun")
+      return handleComingSoon(ctx, "Pump Sniper");
+    if (data === "menu_sniper_moonshot")
+      return handleComingSoon(ctx, "Moonshot");
     if (data === "menu_transfer") return handleComingSoon(ctx, "Transfer");
     if (data === "menu_settings") return handleComingSoon(ctx, "Settings");
     if (data === "menu_tools") return handleComingSoon(ctx, "Tools");
@@ -2126,7 +2133,6 @@ export async function handleCallback(ctx: Context) {
       const tokenAddress = data.replace("toggleauto_", "");
       return handleToggleAutoTPSL(ctx, tokenAddress);
     }
-
   } catch (error: any) {
     console.error("Callback error:", error);
     await ctx.answerCbQuery("❌ Error: " + error.message);

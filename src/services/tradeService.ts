@@ -233,6 +233,47 @@ export async function closeTrade(
   if (error) throw new Error('Failed to close trade: ' + error.message);
 }
 
+export async function updateHighestPrice(tradeId: string, price: number) {
+  try {
+    const { error } = await supabase
+      .from('trades')
+      .update({ highest_price: price })
+      .eq('id', tradeId);
+
+    if (error) {
+      console.error('Error updating highest price:', error);
+      throw error;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Failed to update highest price:', error);
+    return false;
+  }
+}
+
+// Get all open DEX trades with TP/SL (useful for monitoring)
+export async function getAllOpenDEXTrades() {
+  try {
+    const { data, error } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('status', 'open')
+      .eq('exchange_type', 'dex')
+      .eq('auto_tp_sl', true);
+
+    if (error) {
+      console.error('Error fetching open DEX trades:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('Failed to fetch open DEX trades:', error);
+    return [];
+  }
+}
+
 // Get trade by ID
 export async function getTradeById(tradeId: string): Promise<Trade | null> {
   const { data, error } = await supabase

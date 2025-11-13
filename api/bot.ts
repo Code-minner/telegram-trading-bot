@@ -37,13 +37,33 @@ bot.command('wallet', commands.handleWallet);
 bot.on('callback_query', handleCallback);
 bot.on('text', handleTextMessage);
 
-// Webhook entry (no polling)
+// Webhook entry with health check
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    await bot.handleUpdate(req.body);
-    res.status(200).send('OK');
+    // Health check for GET requests
+    if (req.method === 'GET') {
+      return res.status(200).json({ 
+        status: 'ok',
+        bot: 'Netan Trading Bot',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+      });
+    }
+
+    // Handle webhook POST
+    if (req.method === 'POST') {
+      await bot.handleUpdate(req.body);
+      return res.status(200).json({ ok: true });
+    }
+
+    // Method not allowed
+    return res.status(405).json({ error: 'Method not allowed' });
+
   } catch (err: any) {
     console.error('❌ Bot Webhook Error:', err);
-    res.status(500).send('Error');
+    return res.status(500).json({ 
+      error: 'Webhook failed', 
+      message: err.message 
+    });
   }
 }

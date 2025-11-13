@@ -2,12 +2,22 @@
   "version": 2,
   "functions": {
     "api/bot.ts": {
-      "runtime": "@vercel/node@5.0.0"
+      "maxDuration": 10,
+      "memory": 1024
     }
   },
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" }
-  ],
-  "buildCommand": "tsc",
-  "outputDirectory": "."
+  "env": {
+    "NODE_OPTIONS": "--dns-result-order=ipv4first"
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
+    }
+  ]
 }

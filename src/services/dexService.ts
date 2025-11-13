@@ -67,61 +67,69 @@ export class SolanaDEXService {
   async getTokenInfo(tokenAddress: string): Promise<TokenInfo | null> {
     try {
       console.log(`🔍 Fetching token info for: ${tokenAddress}`);
-      
+
       // Try DexScreener first
       try {
         let response = await axios.get(
           `${DEXSCREENER_API}/tokens/${tokenAddress}`,
-          { 
+          {
             timeout: 15000,
             headers: {
-              'Accept': 'application/json',
-              'User-Agent': 'TradingBot/1.0'
-            }
+              Accept: "application/json",
+              "User-Agent": "TradingBot/1.0",
+            },
           }
         );
 
         console.log(`✅ DexScreener tokens endpoint:`, {
           hasPairs: !!response.data?.pairs,
-          pairCount: response.data?.pairs?.length || 0
+          pairCount: response.data?.pairs?.length || 0,
         });
 
         // If no pairs found, try search endpoint (for PumpSwap/PumpFun tokens)
         if (!response.data?.pairs || response.data.pairs.length === 0) {
-          console.log('🔄 No pairs found, trying search endpoint...');
+          console.log("🔄 No pairs found, trying search endpoint...");
           response = await axios.get(
             `${DEXSCREENER_API}/search/?q=${tokenAddress}`,
-            { 
+            {
               timeout: 15000,
               headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'TradingBot/1.0'
-              }
+                Accept: "application/json",
+                "User-Agent": "TradingBot/1.0",
+              },
             }
           );
-          
+
           console.log(`✅ Search endpoint:`, {
             hasPairs: !!response.data?.pairs,
-            pairCount: response.data?.pairs?.length || 0
+            pairCount: response.data?.pairs?.length || 0,
           });
         }
 
         if (response.data?.pairs && response.data.pairs.length > 0) {
           // Filter for Solana pairs and get the one with highest liquidity
-          const solanaPairs = response.data.pairs.filter((p: any) => p.chainId === 'solana');
-          
+          const solanaPairs = response.data.pairs.filter(
+            (p: any) => p.chainId === "solana"
+          );
+
           if (solanaPairs.length === 0) {
-            console.log('❌ No Solana pairs found');
-            throw new Error('No Solana pairs');
+            console.log("❌ No Solana pairs found");
+            throw new Error("No Solana pairs");
           }
 
-          const pair = solanaPairs.sort((a: any, b: any) => 
-            parseFloat(b.liquidity?.usd || '0') - parseFloat(a.liquidity?.usd || '0')
+          const pair = solanaPairs.sort(
+            (a: any, b: any) =>
+              parseFloat(b.liquidity?.usd || "0") -
+              parseFloat(a.liquidity?.usd || "0")
           )[0];
-          
+
           const token = pair.baseToken;
 
-          console.log(`💎 Found: ${token.symbol} on ${pair.dexId}, Liquidity: $${pair.liquidity?.usd || 0}`);
+          console.log(
+            `💎 Found: ${token.symbol} on ${pair.dexId}, Liquidity: $${
+              pair.liquidity?.usd || 0
+            }`
+          );
 
           // Calculate burn percentage if LP is burned
           const burn = pair.liquidity?.burnt
@@ -132,8 +140,8 @@ export class SolanaDEXService {
 
           return {
             address: tokenAddress,
-            symbol: token.symbol || 'UNKNOWN',
-            name: token.name || token.symbol || 'Unknown Token',
+            symbol: token.symbol || "UNKNOWN",
+            name: token.name || token.symbol || "Unknown Token",
             decimals: 9, // Most Solana tokens use 9
             price: parseFloat(pair.priceUsd || "0"),
             priceChange24h: parseFloat(pair.priceChange?.h24 || "0"),
@@ -151,26 +159,25 @@ export class SolanaDEXService {
           };
         }
       } catch (dexError: any) {
-        console.warn('⚠️ DexScreener failed:', dexError.message);
+        console.warn("⚠️ DexScreener failed:", dexError.message);
       }
 
       // If DexScreener fails, try Jupiter token list as fallback
-      console.log('🔄 Trying Jupiter token list...');
+      console.log("🔄 Trying Jupiter token list...");
       const jupiterToken = await this.getTokenFromJupiter(tokenAddress);
       if (jupiterToken) {
         return jupiterToken;
       }
 
       // If all else fails, create a basic token info from on-chain data
-      console.log('🔄 Trying on-chain metadata...');
+      console.log("🔄 Trying on-chain metadata...");
       const basicInfo = await this.getBasicTokenInfo(tokenAddress);
       if (basicInfo) {
         return basicInfo;
       }
 
-      console.error('❌ All token info sources failed');
+      console.error("❌ All token info sources failed");
       return null;
-
     } catch (error) {
       console.error("❌ Failed to fetch token info:", error);
       return null;
@@ -178,43 +185,43 @@ export class SolanaDEXService {
   }
 
   async transferSOL(
-  senderPrivateKey: string,
-  recipientAddress: string,
-  amountSOL: number
-): Promise<string | null> {
-  try {
-    console.log(`💸 Transferring ${amountSOL} SOL to ${recipientAddress}`);
-    
-    const sender = Keypair.fromSecretKey(bs58.decode(senderPrivateKey));
-    const recipient = new PublicKey(recipientAddress);
-    const lamports = Math.floor(amountSOL * LAMPORTS_PER_SOL);
-    
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: sender.publicKey,
-        toPubkey: recipient,
-        lamports,
-      })
-    );
-    
-    const { blockhash } = await this.connection.getLatestBlockhash();
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = sender.publicKey;
-    
-    const signature = await sendAndConfirmTransaction(
-      this.connection,
-      transaction,
-      [sender],
-      { commitment: 'confirmed', maxRetries: 3 }
-    );
-    
-    console.log(`✅ Transfer successful: ${signature}`);
-    return signature;
-  } catch (error: any) {
-    console.error("❌ SOL transfer failed:", error.message);
-    return null;
+    senderPrivateKey: string,
+    recipientAddress: string,
+    amountSOL: number
+  ): Promise<string | null> {
+    try {
+      console.log(`💸 Transferring ${amountSOL} SOL to ${recipientAddress}`);
+
+      const sender = Keypair.fromSecretKey(bs58.decode(senderPrivateKey));
+      const recipient = new PublicKey(recipientAddress);
+      const lamports = Math.floor(amountSOL * LAMPORTS_PER_SOL);
+
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: sender.publicKey,
+          toPubkey: recipient,
+          lamports,
+        })
+      );
+
+      const { blockhash } = await this.connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = sender.publicKey;
+
+      const signature = await sendAndConfirmTransaction(
+        this.connection,
+        transaction,
+        [sender],
+        { commitment: "confirmed", maxRetries: 3 }
+      );
+
+      console.log(`✅ Transfer successful: ${signature}`);
+      return signature;
+    } catch (error: any) {
+      console.error("❌ SOL transfer failed:", error.message);
+      return null;
+    }
   }
-}
 
   async getComprehensiveTokenInfo(tokenAddress: string) {
     try {
@@ -225,7 +232,7 @@ export class SolanaDEXService {
 
       // Try search if no pairs found
       if (!response.data?.pairs || response.data.pairs.length === 0) {
-        console.log('🔄 Trying search for comprehensive info...');
+        console.log("🔄 Trying search for comprehensive info...");
         response = await axios.get(
           `${DEXSCREENER_API}/search/?q=${tokenAddress}`,
           { timeout: 15000 }
@@ -236,28 +243,32 @@ export class SolanaDEXService {
         return null;
       }
 
-      const solanaPairs = response.data.pairs.filter((p: any) => p.chainId === 'solana');
-      const pair = solanaPairs.sort((a: any, b: any) => 
-        parseFloat(b.liquidity?.usd || '0') - parseFloat(a.liquidity?.usd || '0')
+      const solanaPairs = response.data.pairs.filter(
+        (p: any) => p.chainId === "solana"
+      );
+      const pair = solanaPairs.sort(
+        (a: any, b: any) =>
+          parseFloat(b.liquidity?.usd || "0") -
+          parseFloat(a.liquidity?.usd || "0")
       )[0];
-      
+
       return {
         address: tokenAddress,
-        symbol: pair.baseToken?.symbol || 'UNKNOWN',
-        name: pair.baseToken?.name || 'Unknown Token',
-        price: parseFloat(pair.priceUsd || '0'),
-        priceChange24h: parseFloat(pair.priceChange?.h24 || '0'),
-        volume24h: parseFloat(pair.volume?.h24 || '0'),
-        liquidity: parseFloat(pair.liquidity?.usd || '0'),
-        marketCap: parseFloat(pair.fdv || '0'),
+        symbol: pair.baseToken?.symbol || "UNKNOWN",
+        name: pair.baseToken?.name || "Unknown Token",
+        price: parseFloat(pair.priceUsd || "0"),
+        priceChange24h: parseFloat(pair.priceChange?.h24 || "0"),
+        volume24h: parseFloat(pair.volume?.h24 || "0"),
+        liquidity: parseFloat(pair.liquidity?.usd || "0"),
+        marketCap: parseFloat(pair.fdv || "0"),
         pairAddress: pair.pairAddress,
         exchange: pair.dexId,
-        pooledSol: parseFloat(pair.liquidity?.quote || '0'),
+        pooledSol: parseFloat(pair.liquidity?.quote || "0"),
         dexscreenerUrl: pair.url,
-        decimals: 9
+        decimals: 9,
       };
     } catch (error) {
-      console.error('Error fetching comprehensive token info:', error);
+      console.error("Error fetching comprehensive token info:", error);
       return null;
     }
   }
@@ -265,17 +276,14 @@ export class SolanaDEXService {
   // Get token from Jupiter token list
   async getTokenFromJupiter(tokenAddress: string): Promise<TokenInfo | null> {
     try {
-      const response = await axios.get(
-        'https://token.jup.ag/all',
-        { timeout: 10000 }
-      );
+      const response = await axios.get("https://token.jup.ag/all", {
+        timeout: 10000,
+      });
 
-      const token = response.data.find(
-        (t: any) => t.address === tokenAddress
-      );
+      const token = response.data.find((t: any) => t.address === tokenAddress);
 
       if (token) {
-        console.log('✅ Found token in Jupiter list');
+        console.log("✅ Found token in Jupiter list");
         return {
           address: tokenAddress,
           symbol: token.symbol,
@@ -289,7 +297,7 @@ export class SolanaDEXService {
         };
       }
     } catch (error) {
-      console.warn('⚠️ Jupiter token list failed:', error);
+      console.warn("⚠️ Jupiter token list failed:", error);
     }
     return null;
   }
@@ -298,15 +306,15 @@ export class SolanaDEXService {
   async getBasicTokenInfo(tokenAddress: string): Promise<TokenInfo | null> {
     try {
       const publicKey = new PublicKey(tokenAddress);
-      
+
       // Check if it's a valid token account
       const accountInfo = await this.connection.getAccountInfo(publicKey);
-      
+
       if (accountInfo) {
-        console.log('✅ Found token on-chain');
+        console.log("✅ Found token on-chain");
         return {
           address: tokenAddress,
-          symbol: 'UNKNOWN',
+          symbol: "UNKNOWN",
           name: `Token ${tokenAddress.slice(0, 4)}...${tokenAddress.slice(-4)}`,
           decimals: 9,
           price: 0,
@@ -317,7 +325,7 @@ export class SolanaDEXService {
         };
       }
     } catch (error) {
-      console.warn('⚠️ On-chain check failed:', error);
+      console.warn("⚠️ On-chain check failed:", error);
     }
     return null;
   }
@@ -333,33 +341,52 @@ export class SolanaDEXService {
     }
   }
 
-  // Get Jupiter swap quote with better error handling
+  // Get Jupiter swap quote with better error handling and fallbacks
   async getSwapQuote(
     inputMint: string,
     outputMint: string,
     amount: number,
     slippageBps: number = 100
   ): Promise<SwapQuote | null> {
-    try {
-      console.log(`📊 Getting swap quote...`);
-      console.log(`Input: ${inputMint}, Output: ${outputMint}, Amount: ${amount}`);
-      
-      const response = await axios.get(`${JUPITER_API}/quote`, {
-        params: {
-          inputMint,
-          outputMint,
-          amount: Math.floor(amount * 1e9),
-          slippageBps,
-        },
-        timeout: 15000,
-      });
+    const endpoints = [
+      "https://api.jup.ag/swap/v6",
+      "https://quote-api.jup.ag/v6",
+      "https://public.jupiterapi.com/v6",
+    ];
 
-      console.log('✅ Quote received:', response.data);
-      return response.data;
-    } catch (error: any) {
-      console.error("❌ Failed to get swap quote:", error.response?.data || error.message);
-      return null;
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`📊 Trying Jupiter endpoint: ${endpoint}`);
+
+        const response = await axios.get(`${endpoint}/quote`, {
+          params: {
+            inputMint,
+            outputMint,
+            amount: Math.floor(amount * LAMPORTS_PER_SOL),
+            slippageBps,
+            onlyDirectRoutes: false,
+          },
+          timeout: 8000, // 8 second timeout
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "TradingBot/1.0",
+          },
+        });
+
+        console.log("✅ Quote received from:", endpoint);
+        return response.data;
+      } catch (error: any) {
+        console.warn(`⚠️ ${endpoint} failed:`, error.message);
+        if (endpoint === endpoints[endpoints.length - 1]) {
+          // Last endpoint failed
+          throw new Error(`All Jupiter endpoints failed: ${error.message}`);
+        }
+        // Try next endpoint
+        continue;
+      }
     }
+
+    return null;
   }
 
   // Execute swap via Jupiter with better error handling
@@ -368,8 +395,8 @@ export class SolanaDEXService {
     quoteResponse: SwapQuote
   ): Promise<string | null> {
     try {
-      console.log('⚡ Executing swap...');
-      
+      console.log("⚡ Executing swap...");
+
       const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
 
       const { data: swapTransactions } = await axios.post(
@@ -379,39 +406,41 @@ export class SolanaDEXService {
           userPublicKey: wallet.publicKey.toString(),
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true, // Better fee handling
-          prioritizationFeeLamports: 'auto', // Auto priority fee
+          prioritizationFeeLamports: "auto", // Auto priority fee
         },
-        { 
+        {
           timeout: 15000,
           headers: {
-            'Content-Type': 'application/json'
-          }
+            "Content-Type": "application/json",
+          },
         }
       );
 
-      console.log('✅ Swap transaction received');
+      console.log("✅ Swap transaction received");
 
       const { swapTransaction } = swapTransactions;
       const transactionBuf = Buffer.from(swapTransaction, "base64");
       const transaction = VersionedTransaction.deserialize(transactionBuf);
       transaction.sign([wallet]);
 
-      console.log('📡 Sending transaction...');
-      
+      console.log("📡 Sending transaction...");
+
       const signature = await this.connection.sendTransaction(transaction, {
         maxRetries: 3,
         skipPreflight: false,
       });
 
-      console.log('⏳ Confirming transaction:', signature);
-      
+      console.log("⏳ Confirming transaction:", signature);
+
       await this.connection.confirmTransaction(signature, "confirmed");
 
-      console.log('✅ Transaction confirmed!');
+      console.log("✅ Transaction confirmed!");
       return signature;
-      
     } catch (error: any) {
-      console.error("❌ Swap execution failed:", error.response?.data || error.message);
+      console.error(
+        "❌ Swap execution failed:",
+        error.response?.data || error.message
+      );
       return null;
     }
   }
@@ -425,7 +454,7 @@ export class SolanaDEXService {
   ): Promise<{ signature: string; tokensReceived: string } | null> {
     try {
       console.log(`🛒 Buying ${solAmount} SOL worth of ${tokenAddress}`);
-      
+
       const SOL_MINT = "So11111111111111111111111111111111111111112";
       const slippageBps = slippagePercent * 100;
 
@@ -467,7 +496,7 @@ export class SolanaDEXService {
   ): Promise<{ signature: string; solReceived: string } | null> {
     try {
       console.log(`💰 Selling ${tokenAmount} tokens of ${tokenAddress}`);
-      
+
       const SOL_MINT = "So11111111111111111111111111111111111111112";
       const slippageBps = slippagePercent * 100;
 
@@ -539,7 +568,7 @@ export class SolanaDEXService {
   async searchTokens(query: string): Promise<TokenInfo[]> {
     try {
       console.log(`🔍 Searching for: ${query}`);
-      
+
       const response = await axios.get(
         `${DEXSCREENER_API}/search/?q=${encodeURIComponent(query)}`,
         { timeout: 15000 }

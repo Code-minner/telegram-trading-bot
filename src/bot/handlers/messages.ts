@@ -332,7 +332,7 @@ async function handleCustomMemecoinBuy(ctx: Context, amountText: string, tokenAd
       ...Markup.inlineKeyboard([
         [
           Markup.button.callback('✅ Confirm', `confirm_buy_${tokenAddress}_${amount}`),
-          Markup.button.callback('❌ Cancel', 'menu_memecoins')
+          Markup.button.callback('❌ Cancel trade', 'menu_memecoins')
         ]
       ])
     }

@@ -936,7 +936,7 @@ export async function handleConfirmBuy(
         },
       }
     );
-    console.log('✅ handleConfirmBuy COMPLETED');
+    console.log('✅ handleConfirmBuy COMPLETe');
 
   } catch (error: any) {
     console.error("❌ TRADE FAILED:", error);

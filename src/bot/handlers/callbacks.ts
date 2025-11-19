@@ -815,7 +815,7 @@ export async function handleConfirmBuy(
       throw new Error("Token not available");
     }
 
-    // ✅ FIXED: Use the isPumpFunToken method instead of manual check
+    // ✅ DETECT but don't block yet
     const isPumpFun = dexService.isPumpFunToken(tokenInfo);
     console.log('🔍 Is Pump.fun?', isPumpFun, 'Exchange:', tokenInfo.exchange);
 
@@ -825,12 +825,12 @@ export async function handleConfirmBuy(
     const tradingAmount = amount - feeAmount;
     console.log('✅ Fee calculation:', { amount, feeAmount, tradingAmount });
 
-    // Update message with token type
+    // Update message - try trading
     await ctx.telegram.editMessageText(
       chatId,
       messageId,
       undefined,
-      `⏳ *Executing ${isPumpFun ? 'Pump.fun' : 'Jupiter'} Swap...*\n\n` +
+      `⏳ *Executing Swap...*\n\n` +
       `Token: ${tokenInfo.symbol}\n` +
       `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
       `Exchange: ${tokenInfo.exchange || 'Unknown'}\n\n` +
@@ -838,32 +838,39 @@ export async function handleConfirmBuy(
       { parse_mode: "Markdown" }
     );
 
-    console.log('🔄 Attempting swap via smart routing...');
+    console.log('🔄 Attempting swap via Jupiter...');
     
-    // ✅ FIXED: Use the smart routing buyMemecoin which handles both
+    // ✅ TRY JUPITER FOR ALL TOKENS (including pumpswap)
     let result;
     try {
-      // The buyMemecoin method will automatically route to the right handler
       result = await dexService.buyMemecoin(
         privateKey,
         tokenAddress,
         tradingAmount,
-        isPumpFun ? 5 : 1  // Higher slippage for Pump.fun
+        isPumpFun ? 10 : 1  // Higher slippage for Pump.fun
       );
       console.log('✅ Swap result:', result ? 'Success' : 'Failed');
     } catch (swapError: any) {
       console.error('❌ Swap error:', swapError.message);
       
-      // Provide helpful error message based on token type
+      // ✅ ONLY NOW show helpful error based on token type
       if (isPumpFun) {
         throw new Error(
-          `Pump.fun tokens cannot be traded via Jupiter yet.\n\n` +
-          `Please trade directly on https://pump.fun or wait for the token to graduate to Raydium.`
+          `🎯 This Pump.fun token cannot be traded via Jupiter yet.\n\n` +
+          `Token: ${tokenInfo.symbol}\n` +
+          `Liquidity: $${tokenInfo.liquidity?.toFixed(2)}\n\n` +
+          `Options:\n` +
+          `• Trade directly on pump.fun\n` +
+          `• Wait for it to graduate to Raydium\n` +
+          `• Try a different token`
         );
       } else {
         throw new Error(
           `Jupiter swap failed: ${swapError.message}\n\n` +
-          `This token may have low liquidity or be incompatible with Jupiter.`
+          `This token may have:\n` +
+          `• Low liquidity\n` +
+          `• High price impact\n` +
+          `• Trading restrictions`
         );
       }
     }
@@ -899,7 +906,7 @@ export async function handleConfirmBuy(
       tradingAmount,
       tokenInfo.price || 0,
       isPumpFun ? "pumpswap" : "jupiter",
-      isPumpFun ? 5 : 1
+      isPumpFun ? 10 : 1
     );
     console.log('✅ Trade saved');
 
@@ -910,7 +917,7 @@ export async function handleConfirmBuy(
       undefined,
       `✅ *Trade Successful!*\n\n` +
         `Token: *${tokenInfo.symbol}*\n` +
-        `Exchange: ${isPumpFun ? '🎯 Pump.fun' : '🌟 Jupiter'}\n` +
+        `Exchange: ${isPumpFun ? '🎯 Pumpswap' : '🌟 Jupiter'}\n` +
         `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
         `Fee: ${feeAmount.toFixed(4)} SOL\n` +
         `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n\n` +
@@ -937,8 +944,7 @@ export async function handleConfirmBuy(
         chatId,
         messageId,
         undefined,
-        `❌ *Trade Failed*\n\n${error.message}\n\n` +
-        `Please try again or contact support.`,
+        `❌ *Trade Failed*\n\n${error.message}`,
         {
           parse_mode: "Markdown",
           reply_markup: {

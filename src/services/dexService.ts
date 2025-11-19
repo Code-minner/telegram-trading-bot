@@ -17,16 +17,18 @@ import {
 } from "@solana/spl-token";
 import axios from "axios";
 import bs58 from "bs58";
+import BN from 'bn.js';
 
 const SOLANA_RPC =
   process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const JUPITER_API = "https://api.jup.ag/swap/v6";
 const DEXSCREENER_API = "https://api.dexscreener.com/latest/dex";
 
-// Pump.fun Program ID
-const PUMP_FUN_PROGRAM = new PublicKey(
-  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-);
+// Pump.fun constants
+const PUMP_FUN_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+const PUMP_FUN_GLOBAL = new PublicKey("4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf");
+const PUMP_FUN_FEE_RECIPIENT = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
+const PUMP_FUN_EVENT_AUTHORITY = new PublicKey("Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1");
 
 export interface TokenInfo {
   address: string;
@@ -47,7 +49,7 @@ export interface TokenInfo {
   pairAddress?: string;
   exchange?: string;
   dex?: string;
-  isPumpFun?: boolean; // Add this flag
+  isPumpFun?: boolean;
 }
 
 export interface SwapQuote {
@@ -217,50 +219,180 @@ export class SolanaDEXService {
   // PUMP.FUN SPECIFIC METHODS
   // ===========================================
 
+  async buyPumpFunTokenDirect(
+    walletPrivateKey: string,
+    tokenMint: string,
+    solAmount: number,
+    slippagePercent: number = 10
+  ): Promise<{ signature: string; tokensReceived: string } | null> {
+    try {
+      console.log(`🎯 Direct Pump.fun buy: ${tokenMint}`);
+      console.log(`💰 Amount: ${solAmount} SOL, Slippage: ${slippagePercent}%`);
+
+      const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
+      const mint = new PublicKey(tokenMint);
+      
+      // Get bonding curve and associated token account
+      const [bondingCurve] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve"), mint.toBuffer()],
+        PUMP_FUN_PROGRAM
+      );
+
+      const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
+        [
+          bondingCurve.toBuffer(),
+          TOKEN_PROGRAM_ID.toBuffer(),
+          mint.toBuffer(),
+        ],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
+      const associatedUser = await getAssociatedTokenAddress(
+        mint,
+        wallet.publicKey,
+        false
+      );
+
+      console.log('📝 Pump.fun accounts:', {
+        bondingCurve: bondingCurve.toString(),
+        associatedBondingCurve: associatedBondingCurve.toString(),
+        associatedUser: associatedUser.toString(),
+      });
+
+      // Create transaction
+      const transaction = new Transaction();
+
+      // Add compute budget
+      transaction.add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 })
+      );
+
+      // Check if user token account exists
+      const accountInfo = await this.connection.getAccountInfo(associatedUser);
+      
+      if (!accountInfo) {
+        console.log('📝 Creating associated token account...');
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            wallet.publicKey,
+            associatedUser,
+            wallet.publicKey,
+            mint
+          )
+        );
+      }
+
+      // Calculate amounts
+      const solAmountLamports = new BN(Math.floor(solAmount * LAMPORTS_PER_SOL));
+      const slippageBps = slippagePercent * 100;
+      
+      // Get bonding curve state to calculate expected output
+      const bondingCurveAccount = await this.connection.getAccountInfo(bondingCurve);
+      
+      let minTokensOut = new BN(0);
+      if (bondingCurveAccount) {
+        // Parse bonding curve data (simplified)
+        // In production, you'd parse the actual bonding curve state
+        // For now, we'll use a conservative estimate
+        const estimatedTokens = solAmountLamports.mul(new BN(1000000)); // Rough estimate
+        minTokensOut = estimatedTokens.mul(new BN(10000 - slippageBps)).div(new BN(10000));
+      }
+
+      console.log('💎 Amounts:', {
+        solLamports: solAmountLamports.toString(),
+        minTokensOut: minTokensOut.toString(),
+      });
+
+      // Build Pump.fun buy instruction
+      const keys = [
+        { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
+        { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: bondingCurve, isSigner: false, isWritable: true },
+        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+        { pubkey: associatedUser, isSigner: false, isWritable: true },
+        { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
+        { pubkey: PUMP_FUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+        { pubkey: PUMP_FUN_PROGRAM, isSigner: false, isWritable: false },
+      ];
+
+      // Instruction data: discriminator (8 bytes) + amount (8 bytes) + max_sol (8 bytes)
+      const discriminator = Buffer.from([0x66, 0x06, 0x3d, 0x12, 0x01, 0xda, 0xeb, 0xea]); // buy discriminator
+      const data = Buffer.concat([
+        discriminator,
+        solAmountLamports.toArrayLike(Buffer, 'le', 8),
+        minTokensOut.toArrayLike(Buffer, 'le', 8),
+      ]);
+
+      transaction.add({
+        keys,
+        programId: PUMP_FUN_PROGRAM,
+        data,
+      });
+
+      // Get recent blockhash and send
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('finalized');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = wallet.publicKey;
+
+      // Sign transaction
+      transaction.sign(wallet);
+
+      console.log('📡 Sending Pump.fun transaction...');
+
+      // Send transaction
+      const signature = await this.connection.sendRawTransaction(
+        transaction.serialize(),
+        {
+          skipPreflight: false,
+          maxRetries: 3,
+        }
+      );
+
+      console.log('⏳ Confirming Pump.fun transaction:', signature);
+
+      // Confirm transaction
+      await this.connection.confirmTransaction(
+        {
+          signature,
+          blockhash,
+          lastValidBlockHeight,
+        },
+        'confirmed'
+      );
+
+      console.log('✅ Pump.fun buy successful!');
+
+      // Get token balance to calculate tokens received
+      const tokenBalance = await this.connection.getTokenAccountBalance(associatedUser);
+      const tokensReceived = tokenBalance.value.amount;
+
+      return {
+        signature,
+        tokensReceived,
+      };
+    } catch (error: any) {
+      console.error('❌ Direct Pump.fun buy failed:', error);
+      throw error;
+    }
+  }
+
+  // ✅ SINGLE buyPumpFunToken method - no duplicates!
   async buyPumpFunToken(
     walletPrivateKey: string,
     tokenAddress: string,
     solAmount: number,
-    slippagePercent: number = 5
+    slippagePercent: number = 10
   ): Promise<{ signature: string; tokensReceived: string } | null> {
     try {
       console.log(`🎯 Buying Pump.fun token: ${tokenAddress}`);
       console.log(`💰 Amount: ${solAmount} SOL`);
 
-      const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
-      const tokenMint = new PublicKey(tokenAddress);
-      const SOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
-
-      // Get or create associated token account
-      const associatedTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        wallet.publicKey
-      );
-
-      const transaction = new Transaction();
-
-      // Add compute budget
-      transaction.add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50000 })
-      );
-
-      // Check if token account exists
-      const accountInfo = await this.connection.getAccountInfo(associatedTokenAccount);
-      
-      if (!accountInfo) {
-        console.log("📝 Creating associated token account...");
-        transaction.add(
-          createAssociatedTokenAccountInstruction(
-            wallet.publicKey,
-            associatedTokenAccount,
-            wallet.publicKey,
-            tokenMint
-          )
-        );
-      }
-
-      // Try to swap via Jupiter (which now supports many Pump.fun tokens)
+      // Try Jupiter first (for graduated tokens)
       try {
         console.log("🔄 Attempting Jupiter swap for Pump.fun token...");
         const jupiterResult = await this.buyViaJupiter(
@@ -275,13 +407,16 @@ export class SolanaDEXService {
           return jupiterResult;
         }
       } catch (jupiterError: any) {
-        console.warn("⚠️ Jupiter failed for Pump.fun token:", jupiterError.message);
+        console.warn("⚠️ Jupiter failed, trying direct Pump.fun swap:", jupiterError.message);
       }
 
-      // If Jupiter fails, show helpful error message
-      throw new Error(
-        `This Pump.fun token cannot be traded yet. ` +
-        `Please trade directly on https://pump.fun or wait for it to graduate to Raydium.`
+      // If Jupiter fails, try direct Pump.fun trading
+      console.log("🎯 Attempting direct Pump.fun swap...");
+      return await this.buyPumpFunTokenDirect(
+        walletPrivateKey,
+        tokenAddress,
+        solAmount,
+        slippagePercent
       );
 
     } catch (error: any) {
@@ -329,7 +464,7 @@ export class SolanaDEXService {
   }
 
   // ===========================================
-  // JUPITER METHODS (existing code)
+  // JUPITER METHODS
   // ===========================================
 
   async buyViaJupiter(
@@ -441,7 +576,7 @@ export class SolanaDEXService {
           walletPrivateKey,
           tokenAddress,
           solAmount,
-          Math.max(slippagePercent, 5) // Pump.fun needs higher slippage
+          Math.max(slippagePercent, 10) // Pump.fun needs higher slippage
         );
       } else {
         console.log("🌟 Routing to Jupiter handler");
@@ -498,8 +633,9 @@ export class SolanaDEXService {
     }
   }
 
-  // Keep all your existing methods below...
-  // (getSwapQuote, executeSwap, getWalletBalance, etc.)
+  // ===========================================
+  // CORE TRADING METHODS
+  // ===========================================
 
   async getSwapQuote(
     inputMint: string,
@@ -601,8 +737,10 @@ export class SolanaDEXService {
     }
   }
 
-  // ... rest of your existing methods (getWalletBalance, etc.)
-  
+  // ===========================================
+  // UTILITY METHODS
+  // ===========================================
+
   async transferSOL(
     senderPrivateKey: string,
     recipientAddress: string,

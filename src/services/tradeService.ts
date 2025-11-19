@@ -1,5 +1,8 @@
 import { supabase } from '../config/supabase';
 
+// ✅ Define supported DEX types
+export type SupportedDEX = 'raydium' | 'jupiter' | 'orca' | 'pumpswap' | 'pump.fun';
+
 export interface Trade {
   id: string;
   user_id: string;
@@ -28,7 +31,7 @@ export interface MemecoinTrade extends Trade {
   token_address: string;
   token_decimals: number;
   token_symbol: string;
-  dex: 'raydium' | 'jupiter' | 'orca';
+  dex: SupportedDEX;
 }
 
 // Create standard trade
@@ -74,7 +77,7 @@ export async function createMemecoinTrade(
   side: 'buy' | 'sell',
   amount: number,
   entryPrice: number,
-  dex: 'raydium' | 'jupiter' | 'orca',
+  dex: SupportedDEX,
   slippage: number = 1
 ): Promise<Trade> {
   const { data, error } = await supabase

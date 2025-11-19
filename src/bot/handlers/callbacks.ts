@@ -767,7 +767,6 @@ export async function handleConfirmBuy(
 
   console.log('📝 Message ID:', messageId);
 
-  // CRITICAL: Don't use setTimeout - execute immediately
   try {
     console.log('🚀 Starting trade execution...');
     
@@ -816,34 +815,9 @@ export async function handleConfirmBuy(
       throw new Error("Token not available");
     }
 
-    // Check if Pump.fun
-    const isPumpFun = 
-      tokenInfo.dex?.toLowerCase().includes('pump') || 
-      tokenInfo.exchange?.toLowerCase().includes('pump');
-
-    console.log('🔍 Is Pump.fun?', isPumpFun);
-
-    if (isPumpFun) {
-      console.log('⚠️ Pump.fun token detected, aborting');
-      await ctx.telegram.editMessageText(
-        chatId,
-        messageId,
-        undefined,
-        `⚠️ *Pump.fun Token*\n\n` +
-          `Cannot trade Pump.fun tokens via Jupiter.\n\n` +
-          `Token: ${tokenInfo.symbol}\n` +
-          `Exchange: ${tokenInfo.exchange}`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "« Back", callback_data: "menu_memecoins" }]
-            ]
-          }
-        }
-      );
-      return;
-    }
+    // ✅ FIXED: Use the isPumpFunToken method instead of manual check
+    const isPumpFun = dexService.isPumpFunToken(tokenInfo);
+    console.log('🔍 Is Pump.fun?', isPumpFun, 'Exchange:', tokenInfo.exchange);
 
     console.log('💸 Calculating fees...');
     const FEE_PERCENTAGE = 0.005;
@@ -851,36 +825,51 @@ export async function handleConfirmBuy(
     const tradingAmount = amount - feeAmount;
     console.log('✅ Fee calculation:', { amount, feeAmount, tradingAmount });
 
-    console.log('🔄 Attempting Jupiter swap...');
-    
-    // Update message before swap
+    // Update message with token type
     await ctx.telegram.editMessageText(
       chatId,
       messageId,
       undefined,
-      `⏳ *Executing Swap on Jupiter...*\n\n` +
+      `⏳ *Executing ${isPumpFun ? 'Pump.fun' : 'Jupiter'} Swap...*\n\n` +
       `Token: ${tokenInfo.symbol}\n` +
-      `Amount: ${tradingAmount.toFixed(4)} SOL\n\n` +
+      `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
+      `Exchange: ${tokenInfo.exchange || 'Unknown'}\n\n` +
       `⚠️ This may take 15-30 seconds...`,
       { parse_mode: "Markdown" }
     );
 
+    console.log('🔄 Attempting swap via smart routing...');
+    
+    // ✅ FIXED: Use the smart routing buyMemecoin which handles both
     let result;
     try {
+      // The buyMemecoin method will automatically route to the right handler
       result = await dexService.buyMemecoin(
         privateKey,
         tokenAddress,
         tradingAmount,
-        1
+        isPumpFun ? 5 : 1  // Higher slippage for Pump.fun
       );
       console.log('✅ Swap result:', result ? 'Success' : 'Failed');
     } catch (swapError: any) {
       console.error('❌ Swap error:', swapError.message);
-      throw swapError;
+      
+      // Provide helpful error message based on token type
+      if (isPumpFun) {
+        throw new Error(
+          `Pump.fun tokens cannot be traded via Jupiter yet.\n\n` +
+          `Please trade directly on https://pump.fun or wait for the token to graduate to Raydium.`
+        );
+      } else {
+        throw new Error(
+          `Jupiter swap failed: ${swapError.message}\n\n` +
+          `This token may have low liquidity or be incompatible with Jupiter.`
+        );
+      }
     }
 
     if (!result) {
-      throw new Error("Swap failed - Jupiter returned no result");
+      throw new Error("Swap failed - no result returned");
     }
 
     console.log('💰 Collecting fee...');
@@ -909,8 +898,8 @@ export async function handleConfirmBuy(
       "buy",
       tradingAmount,
       tokenInfo.price || 0,
-      "jupiter",
-      1
+      isPumpFun ? "pumpswap" : "jupiter",
+      isPumpFun ? 5 : 1
     );
     console.log('✅ Trade saved');
 
@@ -921,6 +910,7 @@ export async function handleConfirmBuy(
       undefined,
       `✅ *Trade Successful!*\n\n` +
         `Token: *${tokenInfo.symbol}*\n` +
+        `Exchange: ${isPumpFun ? '🎯 Pump.fun' : '🌟 Jupiter'}\n` +
         `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
         `Fee: ${feeAmount.toFixed(4)} SOL\n` +
         `Tokens: ${(parseFloat(result.tokensReceived) / 1e9).toFixed(2)}\n\n` +
@@ -936,7 +926,7 @@ export async function handleConfirmBuy(
         },
       }
     );
-    console.log('✅ handleConfirmBuy COMPLETe');
+    console.log('✅ handleConfirmBuy COMPLETE');
 
   } catch (error: any) {
     console.error("❌ TRADE FAILED:", error);
@@ -948,11 +938,12 @@ export async function handleConfirmBuy(
         messageId,
         undefined,
         `❌ *Trade Failed*\n\n${error.message}\n\n` +
-        `Please check logs or try again.`,
+        `Please try again or contact support.`,
         {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
+              [{ text: "🔄 Retry", callback_data: `confirm_buy_${tokenAddress}_${solAmount}` }],
               [{ text: "« Back", callback_data: "menu_memecoins" }],
             ],
           },

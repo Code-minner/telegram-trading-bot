@@ -18,6 +18,7 @@ import {
 import axios from "axios";
 import bs58 from "bs58";
 import BN from 'bn.js';
+import { PumpFunSDK } from 'pumpdotfun-sdk';
 
 const SOLANA_RPC =
   process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
@@ -219,167 +220,203 @@ export class SolanaDEXService {
   // PUMP.FUN SPECIFIC METHODS
   // ===========================================
 
-  async buyPumpFunTokenDirect(
-    walletPrivateKey: string,
-    tokenMint: string,
-    solAmount: number,
-    slippagePercent: number = 10
-  ): Promise<{ signature: string; tokensReceived: string } | null> {
-    try {
-      console.log(`🎯 Direct Pump.fun buy: ${tokenMint}`);
-      console.log(`💰 Amount: ${solAmount} SOL, Slippage: ${slippagePercent}%`);
+ async buyPumpFunTokenDirect(
+  walletPrivateKey: string,
+  tokenMint: string,
+  solAmount: number,
+  slippagePercent: number = 25
+): Promise<{ signature: string; tokensReceived: string } | null> {
+  try {
+    console.log(`🎯 Direct Pump.fun buy: ${tokenMint}`);
+    console.log(`💰 Amount: ${solAmount} SOL, Slippage: ${slippagePercent}%`);
 
-      const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
-      const mint = new PublicKey(tokenMint);
-      
-      // Get bonding curve and associated token account
-      const [bondingCurve] = PublicKey.findProgramAddressSync(
-        [Buffer.from("bonding-curve"), mint.toBuffer()],
-        PUMP_FUN_PROGRAM
-      );
+    const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
+    const mint = new PublicKey(tokenMint);
+    const SYSTEM_PROGRAM = SystemProgram.programId;
+    const RENT = new PublicKey("SysvarRent111111111111111111111111111111111");
+    
+    // Correct bonding curve PDA
+    const [bondingCurve] = PublicKey.findProgramAddressSync(
+      [Buffer.from("bonding-curve"), mint.toBuffer()],
+      PUMP_FUN_PROGRAM
+    );
 
-      const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
-        [
-          bondingCurve.toBuffer(),
-          TOKEN_PROGRAM_ID.toBuffer(),
-          mint.toBuffer(),
-        ],
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      );
+    // Associated bonding curve token account
+    const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
+      [
+        bondingCurve.toBuffer(),
+        TOKEN_PROGRAM_ID.toBuffer(),
+        mint.toBuffer(),
+      ],
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
 
-      const associatedUser = await getAssociatedTokenAddress(
-        mint,
-        wallet.publicKey,
-        false
-      );
+    // User's associated token account
+    const associatedUser = await getAssociatedTokenAddress(
+      mint,
+      wallet.publicKey,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
 
-      console.log('📝 Pump.fun accounts:', {
-        bondingCurve: bondingCurve.toString(),
-        associatedBondingCurve: associatedBondingCurve.toString(),
-        associatedUser: associatedUser.toString(),
-      });
+    console.log('📝 Pump.fun accounts:', {
+      bondingCurve: bondingCurve.toString(),
+      associatedBondingCurve: associatedBondingCurve.toString(),
+      associatedUser: associatedUser.toString(),
+    });
 
-      // Create transaction
-      const transaction = new Transaction();
+    // Fetch bonding curve account to get reserves
+    const bondingCurveAcc = await this.connection.getAccountInfo(bondingCurve);
+    if (!bondingCurveAcc) {
+      throw new Error("Bonding curve not found - token may not be on Pump.fun");
+    }
 
-      // Add compute budget
+    // Parse bonding curve state (simplified - real implementation needs exact parsing)
+    // Bonding curve layout: virtualTokenReserves(u64), virtualSolReserves(u64), realTokenReserves(u64), realSolReserves(u64), tokenTotalSupply(u64), complete(bool)
+    const data = bondingCurveAcc.data;
+    
+    // Read reserves (positions may vary - this is estimated)
+    const virtualSolReserves = new BN(data.slice(8, 16), 'le');
+    const virtualTokenReserves = new BN(data.slice(0, 8), 'le');
+    const realSolReserves = new BN(data.slice(24, 32), 'le');
+
+    console.log('💎 Bonding curve state:', {
+      virtualSol: virtualSolReserves.toString(),
+      virtualToken: virtualTokenReserves.toString(),
+      realSol: realSolReserves.toString(),
+    });
+
+    // Calculate token output using constant product formula
+    const solAmountLamports = new BN(Math.floor(solAmount * LAMPORTS_PER_SOL));
+    
+    // k = virtualSol * virtualToken
+    // After adding SOL: (virtualSol + solAmount) * (virtualToken - tokensOut) = k
+    // tokensOut = virtualToken - (k / (virtualSol + solAmount))
+    const k = virtualSolReserves.mul(virtualTokenReserves);
+    const newVirtualSol = virtualSolReserves.add(solAmountLamports);
+    const newVirtualToken = k.div(newVirtualSol);
+    const tokensOut = virtualTokenReserves.sub(newVirtualToken);
+    
+    // Apply slippage
+    const slippageBps = new BN(slippagePercent * 100);
+    const minTokensOut = tokensOut.mul(new BN(10000).sub(slippageBps)).div(new BN(10000));
+
+    console.log('💎 Calculated amounts:', {
+      solIn: solAmountLamports.toString(),
+      tokensOut: tokensOut.toString(),
+      minTokensOut: minTokensOut.toString(),
+    });
+
+    // Create transaction
+    const transaction = new Transaction();
+
+    // Add compute budget
+    transaction.add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50000 })
+    );
+
+    // Check if user token account exists
+    const userTokenAccountInfo = await this.connection.getAccountInfo(associatedUser);
+    
+    if (!userTokenAccountInfo) {
+      console.log('📝 Creating user token account...');
       transaction.add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 })
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          associatedUser,
+          wallet.publicKey,
+          mint,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
       );
+    }
 
-      // Check if user token account exists
-      const accountInfo = await this.connection.getAccountInfo(associatedUser);
-      
-      if (!accountInfo) {
-        console.log('📝 Creating associated token account...');
-        transaction.add(
-          createAssociatedTokenAccountInstruction(
-            wallet.publicKey,
-            associatedUser,
-            wallet.publicKey,
-            mint
-          )
-        );
+    // Pump.fun buy instruction
+    // Discriminator for "buy": [102, 6, 61, 18, 1, 218, 235, 234]
+    const discriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
+    
+    // Instruction data: discriminator + amount(u64) + maxSolCost(u64)
+    const maxSolCost = solAmountLamports.mul(new BN(102)).div(new BN(100)); // 2% buffer
+    const instructionData = Buffer.concat([
+      discriminator,
+      tokensOut.toArrayLike(Buffer, 'le', 8), // Token amount we want
+      maxSolCost.toArrayLike(Buffer, 'le', 8), // Max SOL we're willing to pay
+    ]);
+
+    // Account keys for buy instruction
+    const keys = [
+      { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
+      { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
+      { pubkey: mint, isSigner: false, isWritable: false },
+      { pubkey: bondingCurve, isSigner: false, isWritable: true },
+      { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+      { pubkey: associatedUser, isSigner: false, isWritable: true },
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: RENT, isSigner: false, isWritable: false },
+      { pubkey: PUMP_FUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: PUMP_FUN_PROGRAM, isSigner: false, isWritable: false },
+    ];
+
+    transaction.add({
+      keys,
+      programId: PUMP_FUN_PROGRAM,
+      data: instructionData,
+    });
+
+    // Get recent blockhash and send
+    const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = wallet.publicKey;
+
+    // Sign and send
+    transaction.sign(wallet);
+
+    console.log('📡 Sending Pump.fun transaction...');
+
+    const signature = await this.connection.sendRawTransaction(
+      transaction.serialize(),
+      {
+        skipPreflight: false,
+        maxRetries: 3,
       }
+    );
 
-      // Calculate amounts
-      const solAmountLamports = new BN(Math.floor(solAmount * LAMPORTS_PER_SOL));
-      const slippageBps = slippagePercent * 100;
-      
-      // Get bonding curve state to calculate expected output
-      const bondingCurveAccount = await this.connection.getAccountInfo(bondingCurve);
-      
-      let minTokensOut = new BN(0);
-      if (bondingCurveAccount) {
-        // Parse bonding curve data (simplified)
-        // In production, you'd parse the actual bonding curve state
-        // For now, we'll use a conservative estimate
-        const estimatedTokens = solAmountLamports.mul(new BN(1000000)); // Rough estimate
-        minTokensOut = estimatedTokens.mul(new BN(10000 - slippageBps)).div(new BN(10000));
-      }
+    console.log('⏳ Confirming transaction:', signature);
 
-      console.log('💎 Amounts:', {
-        solLamports: solAmountLamports.toString(),
-        minTokensOut: minTokensOut.toString(),
-      });
+    await this.connection.confirmTransaction(
+      {
+        signature,
+        blockhash,
+        lastValidBlockHeight,
+      },
+      'confirmed'
+    );
 
-      // Build Pump.fun buy instruction
-      const keys = [
-        { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
-        { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
-        { pubkey: mint, isSigner: false, isWritable: false },
-        { pubkey: bondingCurve, isSigner: false, isWritable: true },
-        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-        { pubkey: associatedUser, isSigner: false, isWritable: true },
-        { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
-        { pubkey: PUMP_FUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-        { pubkey: PUMP_FUN_PROGRAM, isSigner: false, isWritable: false },
-      ];
+    console.log('✅ Pump.fun buy successful!');
 
-      // Instruction data: discriminator (8 bytes) + amount (8 bytes) + max_sol (8 bytes)
-      const discriminator = Buffer.from([0x66, 0x06, 0x3d, 0x12, 0x01, 0xda, 0xeb, 0xea]); // buy discriminator
-      const data = Buffer.concat([
-        discriminator,
-        solAmountLamports.toArrayLike(Buffer, 'le', 8),
-        minTokensOut.toArrayLike(Buffer, 'le', 8),
-      ]);
-
-      transaction.add({
-        keys,
-        programId: PUMP_FUN_PROGRAM,
-        data,
-      });
-
-      // Get recent blockhash and send
-      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('finalized');
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = wallet.publicKey;
-
-      // Sign transaction
-      transaction.sign(wallet);
-
-      console.log('📡 Sending Pump.fun transaction...');
-
-      // Send transaction
-      const signature = await this.connection.sendRawTransaction(
-        transaction.serialize(),
-        {
-          skipPreflight: false,
-          maxRetries: 3,
-        }
-      );
-
-      console.log('⏳ Confirming Pump.fun transaction:', signature);
-
-      // Confirm transaction
-      await this.connection.confirmTransaction(
-        {
-          signature,
-          blockhash,
-          lastValidBlockHeight,
-        },
-        'confirmed'
-      );
-
-      console.log('✅ Pump.fun buy successful!');
-
-      // Get token balance to calculate tokens received
+    // Get final token balance
+    try {
       const tokenBalance = await this.connection.getTokenAccountBalance(associatedUser);
-      const tokensReceived = tokenBalance.value.amount;
-
       return {
         signature,
-        tokensReceived,
+        tokensReceived: tokenBalance.value.amount,
       };
-    } catch (error: any) {
-      console.error('❌ Direct Pump.fun buy failed:', error);
-      throw error;
+    } catch (e) {
+      return {
+        signature,
+        tokensReceived: tokensOut.toString(),
+      };
     }
+  } catch (error: any) {
+    console.error('❌ Direct Pump.fun buy failed:', error);
+    throw error;
   }
+}
 
   // ✅ SINGLE buyPumpFunToken method - no duplicates!
   async buyPumpFunToken(

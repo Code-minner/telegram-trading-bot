@@ -18,7 +18,7 @@ import {
 import axios from "axios";
 import bs58 from "bs58";
 import BN from 'bn.js';
-import { PumpFunSDK } from 'pumpdotfun-sdk';
+
 
 const SOLANA_RPC =
   process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
@@ -220,247 +220,222 @@ export class SolanaDEXService {
   // PUMP.FUN SPECIFIC METHODS
   // ===========================================
 
- async buyPumpFunTokenDirect(
+//  async buyPumpFunTokenDirect(
+//   walletPrivateKey: string,
+//   tokenMint: string,
+//   solAmount: number,
+//   slippagePercent: number = 25
+// ): Promise<{ signature: string; tokensReceived: string } | null> {
+//   try {
+//     console.log(`🎯 Direct Pump.fun buy: ${tokenMint}`);
+//     console.log(`💰 Amount: ${solAmount} SOL, Slippage: ${slippagePercent}%`);
+
+//     const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
+//     const mint = new PublicKey(tokenMint);
+//     const SYSTEM_PROGRAM = SystemProgram.programId;
+//     const RENT = new PublicKey("SysvarRent111111111111111111111111111111111");
+    
+//     // Correct bonding curve PDA
+//     const [bondingCurve] = PublicKey.findProgramAddressSync(
+//       [Buffer.from("bonding-curve"), mint.toBuffer()],
+//       PUMP_FUN_PROGRAM
+//     );
+
+//     // Associated bonding curve token account
+//     const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
+//       [
+//         bondingCurve.toBuffer(),
+//         TOKEN_PROGRAM_ID.toBuffer(),
+//         mint.toBuffer(),
+//       ],
+//       ASSOCIATED_TOKEN_PROGRAM_ID
+//     );
+
+//     // User's associated token account
+//     const associatedUser = await getAssociatedTokenAddress(
+//       mint,
+//       wallet.publicKey,
+//       false,
+//       TOKEN_PROGRAM_ID,
+//       ASSOCIATED_TOKEN_PROGRAM_ID
+//     );
+
+//     console.log('📝 Pump.fun accounts:', {
+//       bondingCurve: bondingCurve.toString(),
+//       associatedBondingCurve: associatedBondingCurve.toString(),
+//       associatedUser: associatedUser.toString(),
+//     });
+
+//     // Fetch bonding curve account to get reserves
+//     const bondingCurveAcc = await this.connection.getAccountInfo(bondingCurve);
+//     if (!bondingCurveAcc) {
+//       throw new Error("Bonding curve not found - token may not be on Pump.fun");
+//     }
+
+//     // Parse bonding curve state (simplified - real implementation needs exact parsing)
+//     // Bonding curve layout: virtualTokenReserves(u64), virtualSolReserves(u64), realTokenReserves(u64), realSolReserves(u64), tokenTotalSupply(u64), complete(bool)
+//     const data = bondingCurveAcc.data;
+    
+//     // Read reserves (positions may vary - this is estimated)
+//     const virtualSolReserves = new BN(data.slice(8, 16), 'le');
+//     const virtualTokenReserves = new BN(data.slice(0, 8), 'le');
+//     const realSolReserves = new BN(data.slice(24, 32), 'le');
+
+//     console.log('💎 Bonding curve state:', {
+//       virtualSol: virtualSolReserves.toString(),
+//       virtualToken: virtualTokenReserves.toString(),
+//       realSol: realSolReserves.toString(),
+//     });
+
+//     // Calculate token output using constant product formula
+//     const solAmountLamports = new BN(Math.floor(solAmount * LAMPORTS_PER_SOL));
+    
+//     // k = virtualSol * virtualToken
+//     // After adding SOL: (virtualSol + solAmount) * (virtualToken - tokensOut) = k
+//     // tokensOut = virtualToken - (k / (virtualSol + solAmount))
+//     const k = virtualSolReserves.mul(virtualTokenReserves);
+//     const newVirtualSol = virtualSolReserves.add(solAmountLamports);
+//     const newVirtualToken = k.div(newVirtualSol);
+//     const tokensOut = virtualTokenReserves.sub(newVirtualToken);
+    
+//     // Apply slippage
+//     const slippageBps = new BN(slippagePercent * 100);
+//     const minTokensOut = tokensOut.mul(new BN(10000).sub(slippageBps)).div(new BN(10000));
+
+//     console.log('💎 Calculated amounts:', {
+//       solIn: solAmountLamports.toString(),
+//       tokensOut: tokensOut.toString(),
+//       minTokensOut: minTokensOut.toString(),
+//     });
+
+//     // Create transaction
+//     const transaction = new Transaction();
+
+//     // Add compute budget
+//     transaction.add(
+//       ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 }),
+//       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50000 })
+//     );
+
+//     // Check if user token account exists
+//     const userTokenAccountInfo = await this.connection.getAccountInfo(associatedUser);
+    
+//     if (!userTokenAccountInfo) {
+//       console.log('📝 Creating user token account...');
+//       transaction.add(
+//         createAssociatedTokenAccountInstruction(
+//           wallet.publicKey,
+//           associatedUser,
+//           wallet.publicKey,
+//           mint,
+//           TOKEN_PROGRAM_ID,
+//           ASSOCIATED_TOKEN_PROGRAM_ID
+//         )
+//       );
+//     }
+
+//     // Pump.fun buy instruction
+//     // Discriminator for "buy": [102, 6, 61, 18, 1, 218, 235, 234]
+//     const discriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
+    
+//     // Instruction data: discriminator + amount(u64) + maxSolCost(u64)
+//     const maxSolCost = solAmountLamports.mul(new BN(102)).div(new BN(100)); // 2% buffer
+//     const instructionData = Buffer.concat([
+//       discriminator,
+//       tokensOut.toArrayLike(Buffer, 'le', 8), // Token amount we want
+//       maxSolCost.toArrayLike(Buffer, 'le', 8), // Max SOL we're willing to pay
+//     ]);
+
+//     // Account keys for buy instruction
+//     const keys = [
+//       { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
+//       { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
+//       { pubkey: mint, isSigner: false, isWritable: false },
+//       { pubkey: bondingCurve, isSigner: false, isWritable: true },
+//       { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+//       { pubkey: associatedUser, isSigner: false, isWritable: true },
+//       { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+//       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
+//       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+//       { pubkey: RENT, isSigner: false, isWritable: false },
+//       { pubkey: PUMP_FUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+//       { pubkey: PUMP_FUN_PROGRAM, isSigner: false, isWritable: false },
+//     ];
+
+//     transaction.add({
+//       keys,
+//       programId: PUMP_FUN_PROGRAM,
+//       data: instructionData,
+//     });
+
+//     // Get recent blockhash and send
+//     const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+//     transaction.recentBlockhash = blockhash;
+//     transaction.feePayer = wallet.publicKey;
+
+//     // Sign and send
+//     transaction.sign(wallet);
+
+//     console.log('📡 Sending Pump.fun transaction...');
+
+//     const signature = await this.connection.sendRawTransaction(
+//       transaction.serialize(),
+//       {
+//         skipPreflight: false,
+//         maxRetries: 3,
+//       }
+//     );
+
+//     console.log('⏳ Confirming transaction:', signature);
+
+//     await this.connection.confirmTransaction(
+//       {
+//         signature,
+//         blockhash,
+//         lastValidBlockHeight,
+//       },
+//       'confirmed'
+//     );
+
+//     console.log('✅ Pump.fun buy successful!');
+
+//     // Get final token balance
+//     try {
+//       const tokenBalance = await this.connection.getTokenAccountBalance(associatedUser);
+//       return {
+//         signature,
+//         tokensReceived: tokenBalance.value.amount,
+//       };
+//     } catch (e) {
+//       return {
+//         signature,
+//         tokensReceived: tokensOut.toString(),
+//       };
+//     }
+//   } catch (error: any) {
+//     console.error('❌ Direct Pump.fun buy failed:', error);
+//     throw error;
+//   }
+// }
+
+// ✅ SIMPLIFIED - Works for all tokens
+async buyPumpFunToken(
   walletPrivateKey: string,
-  tokenMint: string,
+  tokenAddress: string,
   solAmount: number,
   slippagePercent: number = 25
 ): Promise<{ signature: string; tokensReceived: string } | null> {
-  try {
-    console.log(`🎯 Direct Pump.fun buy: ${tokenMint}`);
-    console.log(`💰 Amount: ${solAmount} SOL, Slippage: ${slippagePercent}%`);
-
-    const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
-    const mint = new PublicKey(tokenMint);
-    const SYSTEM_PROGRAM = SystemProgram.programId;
-    const RENT = new PublicKey("SysvarRent111111111111111111111111111111111");
-    
-    // Correct bonding curve PDA
-    const [bondingCurve] = PublicKey.findProgramAddressSync(
-      [Buffer.from("bonding-curve"), mint.toBuffer()],
-      PUMP_FUN_PROGRAM
-    );
-
-    // Associated bonding curve token account
-    const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
-      [
-        bondingCurve.toBuffer(),
-        TOKEN_PROGRAM_ID.toBuffer(),
-        mint.toBuffer(),
-      ],
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-
-    // User's associated token account
-    const associatedUser = await getAssociatedTokenAddress(
-      mint,
-      wallet.publicKey,
-      false,
-      TOKEN_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-
-    console.log('📝 Pump.fun accounts:', {
-      bondingCurve: bondingCurve.toString(),
-      associatedBondingCurve: associatedBondingCurve.toString(),
-      associatedUser: associatedUser.toString(),
-    });
-
-    // Fetch bonding curve account to get reserves
-    const bondingCurveAcc = await this.connection.getAccountInfo(bondingCurve);
-    if (!bondingCurveAcc) {
-      throw new Error("Bonding curve not found - token may not be on Pump.fun");
-    }
-
-    // Parse bonding curve state (simplified - real implementation needs exact parsing)
-    // Bonding curve layout: virtualTokenReserves(u64), virtualSolReserves(u64), realTokenReserves(u64), realSolReserves(u64), tokenTotalSupply(u64), complete(bool)
-    const data = bondingCurveAcc.data;
-    
-    // Read reserves (positions may vary - this is estimated)
-    const virtualSolReserves = new BN(data.slice(8, 16), 'le');
-    const virtualTokenReserves = new BN(data.slice(0, 8), 'le');
-    const realSolReserves = new BN(data.slice(24, 32), 'le');
-
-    console.log('💎 Bonding curve state:', {
-      virtualSol: virtualSolReserves.toString(),
-      virtualToken: virtualTokenReserves.toString(),
-      realSol: realSolReserves.toString(),
-    });
-
-    // Calculate token output using constant product formula
-    const solAmountLamports = new BN(Math.floor(solAmount * LAMPORTS_PER_SOL));
-    
-    // k = virtualSol * virtualToken
-    // After adding SOL: (virtualSol + solAmount) * (virtualToken - tokensOut) = k
-    // tokensOut = virtualToken - (k / (virtualSol + solAmount))
-    const k = virtualSolReserves.mul(virtualTokenReserves);
-    const newVirtualSol = virtualSolReserves.add(solAmountLamports);
-    const newVirtualToken = k.div(newVirtualSol);
-    const tokensOut = virtualTokenReserves.sub(newVirtualToken);
-    
-    // Apply slippage
-    const slippageBps = new BN(slippagePercent * 100);
-    const minTokensOut = tokensOut.mul(new BN(10000).sub(slippageBps)).div(new BN(10000));
-
-    console.log('💎 Calculated amounts:', {
-      solIn: solAmountLamports.toString(),
-      tokensOut: tokensOut.toString(),
-      minTokensOut: minTokensOut.toString(),
-    });
-
-    // Create transaction
-    const transaction = new Transaction();
-
-    // Add compute budget
-    transaction.add(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50000 })
-    );
-
-    // Check if user token account exists
-    const userTokenAccountInfo = await this.connection.getAccountInfo(associatedUser);
-    
-    if (!userTokenAccountInfo) {
-      console.log('📝 Creating user token account...');
-      transaction.add(
-        createAssociatedTokenAccountInstruction(
-          wallet.publicKey,
-          associatedUser,
-          wallet.publicKey,
-          mint,
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        )
-      );
-    }
-
-    // Pump.fun buy instruction
-    // Discriminator for "buy": [102, 6, 61, 18, 1, 218, 235, 234]
-    const discriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
-    
-    // Instruction data: discriminator + amount(u64) + maxSolCost(u64)
-    const maxSolCost = solAmountLamports.mul(new BN(102)).div(new BN(100)); // 2% buffer
-    const instructionData = Buffer.concat([
-      discriminator,
-      tokensOut.toArrayLike(Buffer, 'le', 8), // Token amount we want
-      maxSolCost.toArrayLike(Buffer, 'le', 8), // Max SOL we're willing to pay
-    ]);
-
-    // Account keys for buy instruction
-    const keys = [
-      { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
-      { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
-      { pubkey: mint, isSigner: false, isWritable: false },
-      { pubkey: bondingCurve, isSigner: false, isWritable: true },
-      { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-      { pubkey: associatedUser, isSigner: false, isWritable: true },
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: RENT, isSigner: false, isWritable: false },
-      { pubkey: PUMP_FUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: PUMP_FUN_PROGRAM, isSigner: false, isWritable: false },
-    ];
-
-    transaction.add({
-      keys,
-      programId: PUMP_FUN_PROGRAM,
-      data: instructionData,
-    });
-
-    // Get recent blockhash and send
-    const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = wallet.publicKey;
-
-    // Sign and send
-    transaction.sign(wallet);
-
-    console.log('📡 Sending Pump.fun transaction...');
-
-    const signature = await this.connection.sendRawTransaction(
-      transaction.serialize(),
-      {
-        skipPreflight: false,
-        maxRetries: 3,
-      }
-    );
-
-    console.log('⏳ Confirming transaction:', signature);
-
-    await this.connection.confirmTransaction(
-      {
-        signature,
-        blockhash,
-        lastValidBlockHeight,
-      },
-      'confirmed'
-    );
-
-    console.log('✅ Pump.fun buy successful!');
-
-    // Get final token balance
-    try {
-      const tokenBalance = await this.connection.getTokenAccountBalance(associatedUser);
-      return {
-        signature,
-        tokensReceived: tokenBalance.value.amount,
-      };
-    } catch (e) {
-      return {
-        signature,
-        tokensReceived: tokensOut.toString(),
-      };
-    }
-  } catch (error: any) {
-    console.error('❌ Direct Pump.fun buy failed:', error);
-    throw error;
-  }
+  console.log(`🎯 Trading Pump.fun token via Jupiter: ${tokenAddress}`);
+  
+  // Pump.fun graduated tokens work through Jupiter with high slippage
+  return await this.buyViaJupiter(
+    walletPrivateKey,
+    tokenAddress,
+    solAmount,
+    slippagePercent
+  );
 }
 
-  // ✅ SINGLE buyPumpFunToken method - no duplicates!
-  async buyPumpFunToken(
-    walletPrivateKey: string,
-    tokenAddress: string,
-    solAmount: number,
-    slippagePercent: number = 10
-  ): Promise<{ signature: string; tokensReceived: string } | null> {
-    try {
-      console.log(`🎯 Buying Pump.fun token: ${tokenAddress}`);
-      console.log(`💰 Amount: ${solAmount} SOL`);
-
-      // Try Jupiter first (for graduated tokens)
-      try {
-        console.log("🔄 Attempting Jupiter swap for Pump.fun token...");
-        const jupiterResult = await this.buyViaJupiter(
-          walletPrivateKey,
-          tokenAddress,
-          solAmount,
-          slippagePercent
-        );
-        
-        if (jupiterResult) {
-          console.log("✅ Jupiter swap successful for Pump.fun token!");
-          return jupiterResult;
-        }
-      } catch (jupiterError: any) {
-        console.warn("⚠️ Jupiter failed, trying direct Pump.fun swap:", jupiterError.message);
-      }
-
-      // If Jupiter fails, try direct Pump.fun trading
-      console.log("🎯 Attempting direct Pump.fun swap...");
-      return await this.buyPumpFunTokenDirect(
-        walletPrivateKey,
-        tokenAddress,
-        solAmount,
-        slippagePercent
-      );
-
-    } catch (error: any) {
-      console.error("❌ Pump.fun buy failed:", error.message);
-      throw error;
-    }
-  }
 
   async sellPumpFunToken(
     walletPrivateKey: string,
@@ -674,50 +649,60 @@ export class SolanaDEXService {
   // CORE TRADING METHODS
   // ===========================================
 
-  async getSwapQuote(
-    inputMint: string,
-    outputMint: string,
-    amount: number,
-    slippageBps: number = 100
-  ): Promise<SwapQuote | null> {
-    const endpoints = [
-      "https://api.jup.ag/swap/v6",
-      "https://quote-api.jup.ag/v6",
-      "https://public.jupiterapi.com/v6",
-    ];
+async getSwapQuote(
+  inputMint: string,
+  outputMint: string,
+  amount: number,
+  slippageBps: number = 100
+): Promise<SwapQuote | null> {
+  try {
+    // ✅ ONLY use this endpoint - it's the only one that works
+    const url = "https://quote-api.jup.ag/v6/quote";
 
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`📊 Trying Jupiter endpoint: ${endpoint}`);
+    console.log(`📊 Getting Jupiter quote...`);
 
-        const response = await axios.get(`${endpoint}/quote`, {
-          params: {
-            inputMint,
-            outputMint,
-            amount: Math.floor(amount * LAMPORTS_PER_SOL),
-            slippageBps,
-            onlyDirectRoutes: false,
-          },
-          timeout: 8000,
-          headers: {
-            Accept: "application/json",
-            "User-Agent": "TradingBot/1.0",
-          },
-        });
+    const params = {
+      inputMint,
+      outputMint,
+      amount: Math.floor(amount * LAMPORTS_PER_SOL).toString(),
+      slippageBps: slippageBps.toString(),
+      onlyDirectRoutes: 'false',
+    };
 
-        console.log("✅ Quote received from:", endpoint);
-        return response.data;
-      } catch (error: any) {
-        console.warn(`⚠️ ${endpoint} failed:`, error.message);
-        if (endpoint === endpoints[endpoints.length - 1]) {
-          throw new Error(`All Jupiter endpoints failed: ${error.message}`);
-        }
-        continue;
-      }
+    console.log('Request params:', params);
+
+    const response = await axios.get(url, {
+      params,
+      timeout: 20000, // 20 seconds
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    console.log("✅ Quote received");
+    return response.data;
+    
+  } catch (error: any) {
+    console.error(`❌ Jupiter failed:`, {
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+    });
+    
+    // Network error
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      throw new Error('Network error: Cannot reach Jupiter API. Check your internet connection.');
     }
-
-    return null;
+    
+    // No route found
+    if (error.response?.status === 404) {
+      throw new Error('No liquidity route found for this token');
+    }
+    
+    throw error;
   }
+}
 
   async executeSwap(
     walletPrivateKey: string,

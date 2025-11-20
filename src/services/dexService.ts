@@ -18,7 +18,11 @@ import {
 import axios from "axios";
 import bs58 from "bs58";
 import BN from 'bn.js';
+import dns from 'dns'; // ✅ ADD THIS
+import { promisify } from 'util'; // ✅ ADD THIS
 
+// ✅ ADD THIS - Force IPv4
+dns.setDefaultResultOrder('ipv4first');
 
 const SOLANA_RPC =
   process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
@@ -656,7 +660,6 @@ async getSwapQuote(
   slippageBps: number = 100
 ): Promise<SwapQuote | null> {
   try {
-    // ✅ ONLY use this endpoint - it's the only one that works
     const url = "https://quote-api.jup.ag/v6/quote";
 
     console.log(`📊 Getting Jupiter quote...`);
@@ -673,11 +676,13 @@ async getSwapQuote(
 
     const response = await axios.get(url, {
       params,
-      timeout: 20000, // 20 seconds
+      timeout: 30000,
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       },
+      // ✅ FIXED - Proper typing for lookup
+      family: 4, // Force IPv4
     });
 
     console.log("✅ Quote received");
@@ -690,12 +695,10 @@ async getSwapQuote(
       status: error.response?.status,
     });
     
-    // Network error
     if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      throw new Error('Network error: Cannot reach Jupiter API. Check your internet connection.');
+      throw new Error('Network error: Cannot reach Jupiter API from Railway. Try again or contact support.');
     }
     
-    // No route found
     if (error.response?.status === 404) {
       throw new Error('No liquidity route found for this token');
     }

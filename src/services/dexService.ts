@@ -18,15 +18,17 @@ import {
 import axios from "axios";
 import bs58 from "bs58";
 import BN from 'bn.js';
-import dns from 'dns'; // ✅ ADD THIS
-import { promisify } from 'util'; // ✅ ADD THIS
+import dns from 'dns';
+import { promisify } from 'util';
 
-// ✅ ADD THIS - Force IPv4
+// ✅ IMPORT RAYDIUM SERVICE (Jupiter replacement)
+import { RaydiumSwapService, getRaydiumSwapService } from "./raydiumSwapService";
+
+// Force IPv4
 dns.setDefaultResultOrder('ipv4first');
 
 const SOLANA_RPC =
   process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-const JUPITER_API = "https://api.jup.ag/swap/v6";
 const DEXSCREENER_API = "https://api.dexscreener.com/latest/dex";
 
 // Pump.fun constants
@@ -68,16 +70,21 @@ export interface SwapQuote {
 
 export class SolanaDEXService {
   private connection: Connection;
+  // ✅ ADD RAYDIUM SERVICE
+  private raydiumSwap: RaydiumSwapService;
 
   constructor() {
     this.connection = new Connection(SOLANA_RPC, "confirmed");
+    // ✅ INITIALIZE RAYDIUM SERVICE
+    this.raydiumSwap = getRaydiumSwapService(SOLANA_RPC);
+    console.log("✅ DEX Service initialized with Raydium (Jupiter blocked)");
   }
 
   // Check if token is on Pump.fun
   isPumpFunToken(tokenInfo: TokenInfo | null): boolean {
     if (!tokenInfo) return false;
     
-    const pumpfunExchanges = ['pumpswap', 'pump.fun', 'pump'];
+    const pumpfunExchanges = ['pumpswap', 'pump.fun', 'pump', 'raydium'];
     const isPumpExchange = pumpfunExchanges.some(ex => 
       tokenInfo.exchange?.toLowerCase().includes(ex)
     );
@@ -198,14 +205,7 @@ export class SolanaDEXService {
         console.warn("⚠️ DexScreener failed:", dexError.message);
       }
 
-      // If DexScreener fails, try Jupiter token list as fallback
-      console.log("🔄 Trying Jupiter token list...");
-      const jupiterToken = await this.getTokenFromJupiter(tokenAddress);
-      if (jupiterToken) {
-        return jupiterToken;
-      }
-
-      // If all else fails, create a basic token info from on-chain data
+      // If DexScreener fails, try to create basic token info from on-chain data
       console.log("🔄 Trying on-chain metadata...");
       const basicInfo = await this.getBasicTokenInfo(tokenAddress);
       if (basicInfo) {
@@ -221,268 +221,49 @@ export class SolanaDEXService {
   }
 
   // ===========================================
-  // PUMP.FUN SPECIFIC METHODS
+  // PUMP.FUN SPECIFIC METHODS (NOW USE RAYDIUM)
   // ===========================================
 
-//  async buyPumpFunTokenDirect(
-//   walletPrivateKey: string,
-//   tokenMint: string,
-//   solAmount: number,
-//   slippagePercent: number = 25
-// ): Promise<{ signature: string; tokensReceived: string } | null> {
-//   try {
-//     console.log(`🎯 Direct Pump.fun buy: ${tokenMint}`);
-//     console.log(`💰 Amount: ${solAmount} SOL, Slippage: ${slippagePercent}%`);
-
-//     const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
-//     const mint = new PublicKey(tokenMint);
-//     const SYSTEM_PROGRAM = SystemProgram.programId;
-//     const RENT = new PublicKey("SysvarRent111111111111111111111111111111111");
+  // ✅ UPDATED - Uses Raydium instead of Jupiter
+  async buyPumpFunToken(
+    walletPrivateKey: string,
+    tokenAddress: string,
+    solAmount: number,
+    slippagePercent: number = 25
+  ): Promise<{ signature: string; tokensReceived: string } | null> {
+    console.log(`🎯 Trading Pump.fun/PumpSwap token via Raydium: ${tokenAddress}`);
     
-//     // Correct bonding curve PDA
-//     const [bondingCurve] = PublicKey.findProgramAddressSync(
-//       [Buffer.from("bonding-curve"), mint.toBuffer()],
-//       PUMP_FUN_PROGRAM
-//     );
+    // PumpSwap graduated tokens work through Raydium
+    return await this.raydiumSwap.buyToken(
+      walletPrivateKey,
+      tokenAddress,
+      solAmount,
+      slippagePercent * 100 // Convert percent to bps
+    );
+  }
 
-//     // Associated bonding curve token account
-//     const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
-//       [
-//         bondingCurve.toBuffer(),
-//         TOKEN_PROGRAM_ID.toBuffer(),
-//         mint.toBuffer(),
-//       ],
-//       ASSOCIATED_TOKEN_PROGRAM_ID
-//     );
-
-//     // User's associated token account
-//     const associatedUser = await getAssociatedTokenAddress(
-//       mint,
-//       wallet.publicKey,
-//       false,
-//       TOKEN_PROGRAM_ID,
-//       ASSOCIATED_TOKEN_PROGRAM_ID
-//     );
-
-//     console.log('📝 Pump.fun accounts:', {
-//       bondingCurve: bondingCurve.toString(),
-//       associatedBondingCurve: associatedBondingCurve.toString(),
-//       associatedUser: associatedUser.toString(),
-//     });
-
-//     // Fetch bonding curve account to get reserves
-//     const bondingCurveAcc = await this.connection.getAccountInfo(bondingCurve);
-//     if (!bondingCurveAcc) {
-//       throw new Error("Bonding curve not found - token may not be on Pump.fun");
-//     }
-
-//     // Parse bonding curve state (simplified - real implementation needs exact parsing)
-//     // Bonding curve layout: virtualTokenReserves(u64), virtualSolReserves(u64), realTokenReserves(u64), realSolReserves(u64), tokenTotalSupply(u64), complete(bool)
-//     const data = bondingCurveAcc.data;
-    
-//     // Read reserves (positions may vary - this is estimated)
-//     const virtualSolReserves = new BN(data.slice(8, 16), 'le');
-//     const virtualTokenReserves = new BN(data.slice(0, 8), 'le');
-//     const realSolReserves = new BN(data.slice(24, 32), 'le');
-
-//     console.log('💎 Bonding curve state:', {
-//       virtualSol: virtualSolReserves.toString(),
-//       virtualToken: virtualTokenReserves.toString(),
-//       realSol: realSolReserves.toString(),
-//     });
-
-//     // Calculate token output using constant product formula
-//     const solAmountLamports = new BN(Math.floor(solAmount * LAMPORTS_PER_SOL));
-    
-//     // k = virtualSol * virtualToken
-//     // After adding SOL: (virtualSol + solAmount) * (virtualToken - tokensOut) = k
-//     // tokensOut = virtualToken - (k / (virtualSol + solAmount))
-//     const k = virtualSolReserves.mul(virtualTokenReserves);
-//     const newVirtualSol = virtualSolReserves.add(solAmountLamports);
-//     const newVirtualToken = k.div(newVirtualSol);
-//     const tokensOut = virtualTokenReserves.sub(newVirtualToken);
-    
-//     // Apply slippage
-//     const slippageBps = new BN(slippagePercent * 100);
-//     const minTokensOut = tokensOut.mul(new BN(10000).sub(slippageBps)).div(new BN(10000));
-
-//     console.log('💎 Calculated amounts:', {
-//       solIn: solAmountLamports.toString(),
-//       tokensOut: tokensOut.toString(),
-//       minTokensOut: minTokensOut.toString(),
-//     });
-
-//     // Create transaction
-//     const transaction = new Transaction();
-
-//     // Add compute budget
-//     transaction.add(
-//       ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 }),
-//       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50000 })
-//     );
-
-//     // Check if user token account exists
-//     const userTokenAccountInfo = await this.connection.getAccountInfo(associatedUser);
-    
-//     if (!userTokenAccountInfo) {
-//       console.log('📝 Creating user token account...');
-//       transaction.add(
-//         createAssociatedTokenAccountInstruction(
-//           wallet.publicKey,
-//           associatedUser,
-//           wallet.publicKey,
-//           mint,
-//           TOKEN_PROGRAM_ID,
-//           ASSOCIATED_TOKEN_PROGRAM_ID
-//         )
-//       );
-//     }
-
-//     // Pump.fun buy instruction
-//     // Discriminator for "buy": [102, 6, 61, 18, 1, 218, 235, 234]
-//     const discriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
-    
-//     // Instruction data: discriminator + amount(u64) + maxSolCost(u64)
-//     const maxSolCost = solAmountLamports.mul(new BN(102)).div(new BN(100)); // 2% buffer
-//     const instructionData = Buffer.concat([
-//       discriminator,
-//       tokensOut.toArrayLike(Buffer, 'le', 8), // Token amount we want
-//       maxSolCost.toArrayLike(Buffer, 'le', 8), // Max SOL we're willing to pay
-//     ]);
-
-//     // Account keys for buy instruction
-//     const keys = [
-//       { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
-//       { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
-//       { pubkey: mint, isSigner: false, isWritable: false },
-//       { pubkey: bondingCurve, isSigner: false, isWritable: true },
-//       { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-//       { pubkey: associatedUser, isSigner: false, isWritable: true },
-//       { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-//       { pubkey: SYSTEM_PROGRAM, isSigner: false, isWritable: false },
-//       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-//       { pubkey: RENT, isSigner: false, isWritable: false },
-//       { pubkey: PUMP_FUN_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-//       { pubkey: PUMP_FUN_PROGRAM, isSigner: false, isWritable: false },
-//     ];
-
-//     transaction.add({
-//       keys,
-//       programId: PUMP_FUN_PROGRAM,
-//       data: instructionData,
-//     });
-
-//     // Get recent blockhash and send
-//     const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
-//     transaction.recentBlockhash = blockhash;
-//     transaction.feePayer = wallet.publicKey;
-
-//     // Sign and send
-//     transaction.sign(wallet);
-
-//     console.log('📡 Sending Pump.fun transaction...');
-
-//     const signature = await this.connection.sendRawTransaction(
-//       transaction.serialize(),
-//       {
-//         skipPreflight: false,
-//         maxRetries: 3,
-//       }
-//     );
-
-//     console.log('⏳ Confirming transaction:', signature);
-
-//     await this.connection.confirmTransaction(
-//       {
-//         signature,
-//         blockhash,
-//         lastValidBlockHeight,
-//       },
-//       'confirmed'
-//     );
-
-//     console.log('✅ Pump.fun buy successful!');
-
-//     // Get final token balance
-//     try {
-//       const tokenBalance = await this.connection.getTokenAccountBalance(associatedUser);
-//       return {
-//         signature,
-//         tokensReceived: tokenBalance.value.amount,
-//       };
-//     } catch (e) {
-//       return {
-//         signature,
-//         tokensReceived: tokensOut.toString(),
-//       };
-//     }
-//   } catch (error: any) {
-//     console.error('❌ Direct Pump.fun buy failed:', error);
-//     throw error;
-//   }
-// }
-
-// ✅ SIMPLIFIED - Works for all tokens
-async buyPumpFunToken(
-  walletPrivateKey: string,
-  tokenAddress: string,
-  solAmount: number,
-  slippagePercent: number = 25
-): Promise<{ signature: string; tokensReceived: string } | null> {
-  console.log(`🎯 Trading Pump.fun token via Jupiter: ${tokenAddress}`);
-  
-  // Pump.fun graduated tokens work through Jupiter with high slippage
-  return await this.buyViaJupiter(
-    walletPrivateKey,
-    tokenAddress,
-    solAmount,
-    slippagePercent
-  );
-}
-
-
+  // ✅ UPDATED - Uses Raydium instead of Jupiter
   async sellPumpFunToken(
     walletPrivateKey: string,
     tokenAddress: string,
     tokenAmount: number,
     slippagePercent: number = 5
   ): Promise<{ signature: string; solReceived: string } | null> {
-    try {
-      console.log(`🎯 Selling Pump.fun token: ${tokenAddress}`);
-      
-      // Try Jupiter first (supports many Pump.fun tokens that graduated)
-      try {
-        console.log("🔄 Attempting Jupiter swap for Pump.fun token sell...");
-        const jupiterResult = await this.sellViaJupiter(
-          walletPrivateKey,
-          tokenAddress,
-          tokenAmount,
-          slippagePercent
-        );
-        
-        if (jupiterResult) {
-          console.log("✅ Jupiter sell successful for Pump.fun token!");
-          return jupiterResult;
-        }
-      } catch (jupiterError: any) {
-        console.warn("⚠️ Jupiter sell failed:", jupiterError.message);
-      }
-
-      throw new Error(
-        `Cannot sell this Pump.fun token yet. ` +
-        `Please trade directly on https://pump.fun`
-      );
-
-    } catch (error: any) {
-      console.error("❌ Pump.fun sell failed:", error.message);
-      throw error;
-    }
+    console.log(`🎯 Selling Pump.fun/PumpSwap token via Raydium: ${tokenAddress}`);
+    
+    return await this.raydiumSwap.sellToken(
+      walletPrivateKey,
+      tokenAddress,
+      tokenAmount,
+      slippagePercent * 100 // Convert percent to bps
+    );
   }
 
   // ===========================================
-  // JUPITER METHODS
+  // MAIN TRADING METHODS (NOW USE RAYDIUM)
   // ===========================================
 
+  // ✅ UPDATED - Uses Raydium instead of Jupiter
   async buyViaJupiter(
     walletPrivateKey: string,
     tokenAddress: string,
@@ -490,40 +271,24 @@ async buyPumpFunToken(
     slippagePercent: number = 1
   ): Promise<{ signature: string; tokensReceived: string } | null> {
     try {
-      console.log(`🛒 Buying via Jupiter: ${solAmount} SOL worth of ${tokenAddress}`);
+      console.log(`🛒 Buying via Raydium (Jupiter blocked): ${solAmount} SOL → ${tokenAddress}`);
 
-      const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const slippageBps = slippagePercent * 100;
-
-      const quote = await this.getSwapQuote(
-        SOL_MINT,
+      // Use Raydium instead of Jupiter
+      const result = await this.raydiumSwap.buyToken(
+        walletPrivateKey,
         tokenAddress,
         solAmount,
-        slippageBps
+        slippagePercent * 100 // Convert percent to bps
       );
 
-      if (!quote) {
-        throw new Error("Failed to get swap quote from Jupiter");
-      }
-
-      console.log(`💎 Expected tokens: ${quote.outAmount}`);
-
-      const signature = await this.executeSwap(walletPrivateKey, quote);
-
-      if (!signature) {
-        throw new Error("Failed to execute swap");
-      }
-
-      return {
-        signature,
-        tokensReceived: quote.outAmount,
-      };
+      return result;
     } catch (error: any) {
-      console.error("❌ Jupiter buy failed:", error);
+      console.error("❌ Raydium buy failed:", error);
       throw error;
     }
   }
 
+  // ✅ UPDATED - Uses Raydium instead of Jupiter
   async sellViaJupiter(
     walletPrivateKey: string,
     tokenAddress: string,
@@ -531,36 +296,19 @@ async buyPumpFunToken(
     slippagePercent: number = 1
   ): Promise<{ signature: string; solReceived: string } | null> {
     try {
-      console.log(`💰 Selling via Jupiter: ${tokenAmount} tokens`);
+      console.log(`💰 Selling via Raydium (Jupiter blocked): ${tokenAmount} → SOL`);
 
-      const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const slippageBps = slippagePercent * 100;
-
-      const quote = await this.getSwapQuote(
+      // Use Raydium instead of Jupiter
+      const result = await this.raydiumSwap.sellToken(
+        walletPrivateKey,
         tokenAddress,
-        SOL_MINT,
         tokenAmount,
-        slippageBps
+        slippagePercent * 100 // Convert percent to bps
       );
 
-      if (!quote) {
-        throw new Error("Failed to get swap quote");
-      }
-
-      console.log(`💵 Expected SOL: ${quote.outAmount}`);
-
-      const signature = await this.executeSwap(walletPrivateKey, quote);
-
-      if (!signature) {
-        throw new Error("Failed to execute swap");
-      }
-
-      return {
-        signature,
-        solReceived: quote.outAmount,
-      };
+      return result;
     } catch (error: any) {
-      console.error("❌ Jupiter sell failed:", error);
+      console.error("❌ Raydium sell failed:", error);
       throw error;
     }
   }
@@ -582,27 +330,21 @@ async buyPumpFunToken(
       const tokenInfo = await this.getTokenInfo(tokenAddress);
       
       if (!tokenInfo) {
-        throw new Error("Unable to fetch token information");
+        console.log("⚠️ Could not fetch token info, proceeding with Raydium...");
       }
 
-      // Route based on token type
-      if (this.isPumpFunToken(tokenInfo)) {
-        console.log("🎯 Routing to Pump.fun handler");
-        return await this.buyPumpFunToken(
-          walletPrivateKey,
-          tokenAddress,
-          solAmount,
-          Math.max(slippagePercent, 10) // Pump.fun needs higher slippage
-        );
-      } else {
-        console.log("🌟 Routing to Jupiter handler");
-        return await this.buyViaJupiter(
-          walletPrivateKey,
-          tokenAddress,
-          solAmount,
-          slippagePercent
-        );
-      }
+      // All tokens now go through Raydium (Jupiter is blocked)
+      const isPumpToken = tokenInfo ? this.isPumpFunToken(tokenInfo) : false;
+      const slippage = isPumpToken ? Math.max(slippagePercent, 10) : slippagePercent;
+      
+      console.log(`🎯 Routing to Raydium with ${slippage}% slippage`);
+      
+      return await this.raydiumSwap.buyToken(
+        walletPrivateKey,
+        tokenAddress,
+        solAmount,
+        slippage * 100 // Convert to bps
+      );
     } catch (error: any) {
       console.error("❌ Buy failed:", error.message);
       throw error;
@@ -618,31 +360,25 @@ async buyPumpFunToken(
     try {
       console.log(`🚀 Starting smart sell for ${tokenAddress}`);
       
-      // Get token info to determine routing
+      // Get token info to determine slippage
       const tokenInfo = await this.getTokenInfo(tokenAddress);
       
       if (!tokenInfo) {
-        throw new Error("Unable to fetch token information");
+        console.log("⚠️ Could not fetch token info, proceeding with Raydium...");
       }
 
-      // Route based on token type
-      if (this.isPumpFunToken(tokenInfo)) {
-        console.log("🎯 Routing to Pump.fun handler");
-        return await this.sellPumpFunToken(
-          walletPrivateKey,
-          tokenAddress,
-          tokenAmount,
-          Math.max(slippagePercent, 5)
-        );
-      } else {
-        console.log("🌟 Routing to Jupiter handler");
-        return await this.sellViaJupiter(
-          walletPrivateKey,
-          tokenAddress,
-          tokenAmount,
-          slippagePercent
-        );
-      }
+      // All tokens now go through Raydium (Jupiter is blocked)
+      const isPumpToken = tokenInfo ? this.isPumpFunToken(tokenInfo) : false;
+      const slippage = isPumpToken ? Math.max(slippagePercent, 5) : slippagePercent;
+      
+      console.log(`🎯 Routing to Raydium with ${slippage}% slippage`);
+      
+      return await this.raydiumSwap.sellToken(
+        walletPrivateKey,
+        tokenAddress,
+        tokenAmount,
+        slippage * 100 // Convert to bps
+      );
     } catch (error: any) {
       console.error("❌ Sell failed:", error.message);
       throw error;
@@ -650,114 +386,41 @@ async buyPumpFunToken(
   }
 
   // ===========================================
-  // CORE TRADING METHODS
+  // QUOTE METHOD (NOW USES RAYDIUM)
   // ===========================================
 
-async getSwapQuote(
-  inputMint: string,
-  outputMint: string,
-  amount: number,
-  slippageBps: number = 100
-): Promise<SwapQuote | null> {
-  try {
-    const url = "https://quote-api.jup.ag/v6/quote";
-
-    console.log(`📊 Getting Jupiter quote...`);
-
-    const params = {
-      inputMint,
-      outputMint,
-      amount: Math.floor(amount * LAMPORTS_PER_SOL).toString(),
-      slippageBps: slippageBps.toString(),
-      onlyDirectRoutes: 'false',
-    };
-
-    console.log('Request params:', params);
-
-    const response = await axios.get(url, {
-      params,
-      timeout: 30000,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      // ✅ FIXED - Proper typing for lookup
-      family: 4, // Force IPv4
-    });
-
-    console.log("✅ Quote received");
-    return response.data;
-    
-  } catch (error: any) {
-    console.error(`❌ Jupiter failed:`, {
-      message: error.message,
-      code: error.code,
-      status: error.response?.status,
-    });
-    
-    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      throw new Error('Network error: Cannot reach Jupiter API from Railway. Try again or contact support.');
-    }
-    
-    if (error.response?.status === 404) {
-      throw new Error('No liquidity route found for this token');
-    }
-    
-    throw error;
-  }
-}
-
-  async executeSwap(
-    walletPrivateKey: string,
-    quoteResponse: SwapQuote
-  ): Promise<string | null> {
+  // ✅ UPDATED - Uses Raydium instead of Jupiter
+  async getSwapQuote(
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    slippageBps: number = 100
+  ): Promise<SwapQuote | null> {
     try {
-      console.log("⚡ Executing swap...");
-
-      const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
-
-      const { data: swapTransactions } = await axios.post(
-        `${JUPITER_API}/swap`,
-        {
-          quoteResponse,
-          userPublicKey: wallet.publicKey.toString(),
-          wrapAndUnwrapSol: true,
-          dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: "auto",
-        },
-        {
-          timeout: 15000,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+      console.log("📊 Getting quote via Raydium (Jupiter blocked)...");
+      
+      const quote = await this.raydiumSwap.getSwapQuote(
+        inputMint,
+        outputMint,
+        amount,
+        slippageBps
       );
+      
+      if (!quote) {
+        return null;
+      }
 
-      console.log("✅ Swap transaction received");
-
-      const { swapTransaction } = swapTransactions;
-      const transactionBuf = Buffer.from(swapTransaction, "base64");
-      const transaction = VersionedTransaction.deserialize(transactionBuf);
-      transaction.sign([wallet]);
-
-      console.log("📡 Sending transaction...");
-
-      const signature = await this.connection.sendTransaction(transaction, {
-        maxRetries: 3,
-        skipPreflight: false,
-      });
-
-      console.log("⏳ Confirming transaction:", signature);
-
-      await this.connection.confirmTransaction(signature, "confirmed");
-
-      console.log("✅ Transaction confirmed!");
-      return signature;
+      // Convert Raydium quote format to match expected SwapQuote interface
+      return {
+        inputMint: quote.data.inputMint,
+        outputMint: quote.data.outputMint,
+        inAmount: quote.data.inputAmount,
+        outAmount: quote.data.outputAmount,
+        priceImpactPct: quote.data.priceImpactPct,
+        routePlan: quote.data.routePlan,
+      };
     } catch (error: any) {
-      console.error(
-        "❌ Swap execution failed:",
-        error.response?.data || error.message
-      );
+      console.error(`❌ Raydium quote failed:`, error.message);
       throw error;
     }
   }
@@ -884,35 +547,6 @@ async getSwapQuote(
       console.error("Failed to get public key:", error);
       return "";
     }
-  }
-
-  async getTokenFromJupiter(tokenAddress: string): Promise<TokenInfo | null> {
-    try {
-      const response = await axios.get("https://token.jup.ag/all", {
-        timeout: 10000,
-      });
-
-      const token = response.data.find((t: any) => t.address === tokenAddress);
-
-      if (token) {
-        console.log("✅ Found token in Jupiter list");
-        return {
-          address: tokenAddress,
-          symbol: token.symbol,
-          name: token.name,
-          decimals: token.decimals || 9,
-          price: 0,
-          priceChange24h: 0,
-          marketCap: 0,
-          liquidity: 0,
-          volume24h: 0,
-          isPumpFun: false,
-        };
-      }
-    } catch (error) {
-      console.warn("⚠️ Jupiter token list failed:", error);
-    }
-    return null;
   }
 
   async getBasicTokenInfo(tokenAddress: string): Promise<TokenInfo | null> {

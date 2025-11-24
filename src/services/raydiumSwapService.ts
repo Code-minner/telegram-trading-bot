@@ -85,7 +85,7 @@ export class RaydiumSwapService {
 
       const amountInLamports = Math.floor(amount * LAMPORTS_PER_SOL);
 
-      const url = `${RAYDIUM_API.QUOTE}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountInLamports}&slippageBps=${slippageBps}`;
+      const url = `${RAYDIUM_API.QUOTE}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountInLamports}&slippageBps=${slippageBps}&txVersion=V0`;
 
       console.log("🔗 Raydium quote URL:", url);
 
@@ -111,11 +111,13 @@ export class RaydiumSwapService {
       return response.data;
     } catch (error: any) {
       console.error("❌ Raydium quote error:", error.message);
-      
+
       if (error.code === "ENOTFOUND") {
-        throw new Error("Cannot reach Raydium API. Check your internet connection.");
+        throw new Error(
+          "Cannot reach Raydium API. Check your internet connection."
+        );
       }
-      
+
       throw error;
     }
   }
@@ -130,7 +132,7 @@ export class RaydiumSwapService {
     try {
       console.log("📊 Getting Raydium sell quote...");
 
-      const url = `${RAYDIUM_API.QUOTE}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`;
+      const url = `${RAYDIUM_API.QUOTE}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}&txVersion=V0`;
 
       const response = await axios.get<RaydiumQuote>(url, {
         timeout: 30000,
@@ -157,7 +159,7 @@ export class RaydiumSwapService {
       const response = await axios.get(RAYDIUM_API.PRIORITY_FEE, {
         timeout: 10000,
       });
-      
+
       return String(response.data?.data?.default?.h || "100000");
     } catch {
       return "100000";
@@ -188,7 +190,9 @@ export class RaydiumSwapService {
       );
 
       if (!quote) {
-        throw new Error("Failed to get Raydium quote - no route found for this token");
+        throw new Error(
+          "Failed to get Raydium quote - no route found for this token"
+        );
       }
 
       // Step 2: Get user token accounts
@@ -227,7 +231,9 @@ export class RaydiumSwapService {
           wrapSol: true,
           unwrapSol: false,
           inputAccount: undefined,
-          outputAccount: isOutputAccountExist ? outputTokenAcc.toBase58() : undefined,
+          outputAccount: isOutputAccountExist
+            ? outputTokenAcc.toBase58()
+            : undefined,
         },
         {
           timeout: 30000,
@@ -259,7 +265,9 @@ export class RaydiumSwapService {
           (transaction as Transaction).sign(wallet);
         }
 
-        console.log(`📡 Sending transaction ${i + 1}/${swapResponse.data.data.length}...`);
+        console.log(
+          `📡 Sending transaction ${i + 1}/${swapResponse.data.data.length}...`
+        );
 
         const signature = await this.connection.sendRawTransaction(
           transaction.serialize(),
@@ -281,7 +289,9 @@ export class RaydiumSwapService {
       // Get final token balance
       let tokensReceived = quote.data.outputAmount;
       try {
-        const balance = await this.connection.getTokenAccountBalance(outputTokenAcc);
+        const balance = await this.connection.getTokenAccountBalance(
+          outputTokenAcc
+        );
         tokensReceived = balance.value.amount;
       } catch {}
 
@@ -378,7 +388,9 @@ export class RaydiumSwapService {
           (transaction as Transaction).sign(wallet);
         }
 
-        console.log(`📡 Sending transaction ${i + 1}/${swapResponse.data.data.length}...`);
+        console.log(
+          `📡 Sending transaction ${i + 1}/${swapResponse.data.data.length}...`
+        );
 
         const signature = await this.connection.sendRawTransaction(
           transaction.serialize(),
@@ -394,7 +406,9 @@ export class RaydiumSwapService {
         finalSignature = signature;
       }
 
-      const solReceived = (parseInt(quote.data.outputAmount) / LAMPORTS_PER_SOL).toFixed(6);
+      const solReceived = (
+        parseInt(quote.data.outputAmount) / LAMPORTS_PER_SOL
+      ).toFixed(6);
 
       console.log("✅ Raydium sell complete!");
 
@@ -417,7 +431,11 @@ let instance: RaydiumSwapService | null = null;
 
 export function getRaydiumSwapService(rpcUrl?: string): RaydiumSwapService {
   if (!instance) {
-    const url = rpcUrl || process.env.SOLANA_RPC_URL || process.env.HELIUS_RPC_URL || "https://api.mainnet-beta.solana.com";
+    const url =
+      rpcUrl ||
+      process.env.SOLANA_RPC_URL ||
+      process.env.HELIUS_RPC_URL ||
+      "https://api.mainnet-beta.solana.com";
     instance = new RaydiumSwapService(url);
   }
   return instance;

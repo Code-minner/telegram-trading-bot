@@ -23,6 +23,8 @@ import { promisify } from 'util';
 
 // ✅ IMPORT RAYDIUM SERVICE (Jupiter replacement)
 import { RaydiumSwapService, getRaydiumSwapService } from "./raydiumSwapService";
+// ✅ IMPORT PUMPSWAP SERVICE (for PumpSwap tokens)
+import { PumpSwapService, getPumpSwapService } from "./pumpSwapService";
 
 // Force IPv4
 dns.setDefaultResultOrder('ipv4first');
@@ -72,12 +74,16 @@ export class SolanaDEXService {
   private connection: Connection;
   // ✅ ADD RAYDIUM SERVICE
   private raydiumSwap: RaydiumSwapService;
+  // ✅ ADD PUMPSWAP SERVICE
+  private pumpSwap: PumpSwapService;
 
   constructor() {
     this.connection = new Connection(SOLANA_RPC, "confirmed");
     // ✅ INITIALIZE RAYDIUM SERVICE
     this.raydiumSwap = getRaydiumSwapService(SOLANA_RPC);
-    console.log("✅ DEX Service initialized with Raydium (Jupiter blocked)");
+    // ✅ INITIALIZE PUMPSWAP SERVICE
+    this.pumpSwap = getPumpSwapService(SOLANA_RPC);
+    console.log("✅ DEX Service initialized with Raydium + PumpPortal");
   }
 
   // Check if token is on Pump.fun
@@ -224,39 +230,60 @@ export class SolanaDEXService {
   // PUMP.FUN SPECIFIC METHODS (NOW USE RAYDIUM)
   // ===========================================
 
-  // ✅ UPDATED - Uses Raydium instead of Jupiter
+  // ✅ UPDATED - Uses PumpPortal for PumpSwap tokens
   async buyPumpFunToken(
     walletPrivateKey: string,
     tokenAddress: string,
     solAmount: number,
     slippagePercent: number = 25
   ): Promise<{ signature: string; tokensReceived: string } | null> {
-    console.log(`🎯 Trading Pump.fun/PumpSwap token via Raydium: ${tokenAddress}`);
+    console.log(`🎯 Trading Pump.fun/PumpSwap token via PumpPortal: ${tokenAddress}`);
     
-    // PumpSwap graduated tokens work through Raydium
-    return await this.raydiumSwap.buyToken(
-      walletPrivateKey,
-      tokenAddress,
-      solAmount,
-      slippagePercent * 100 // Convert percent to bps
-    );
+    try {
+      // Try PumpPortal first (works for PumpSwap tokens)
+      return await this.pumpSwap.buyToken(
+        walletPrivateKey,
+        tokenAddress,
+        solAmount,
+        slippagePercent
+      );
+    } catch (error: any) {
+      console.warn("⚠️ PumpPortal failed, trying Raydium...");
+      // Fall back to Raydium
+      return await this.raydiumSwap.buyToken(
+        walletPrivateKey,
+        tokenAddress,
+        solAmount,
+        slippagePercent * 100
+      );
+    }
   }
 
-  // ✅ UPDATED - Uses Raydium instead of Jupiter
+  // ✅ UPDATED - Uses PumpPortal for PumpSwap tokens
   async sellPumpFunToken(
     walletPrivateKey: string,
     tokenAddress: string,
     tokenAmount: number,
     slippagePercent: number = 5
   ): Promise<{ signature: string; solReceived: string } | null> {
-    console.log(`🎯 Selling Pump.fun/PumpSwap token via Raydium: ${tokenAddress}`);
+    console.log(`🎯 Selling Pump.fun/PumpSwap token via PumpPortal: ${tokenAddress}`);
     
-    return await this.raydiumSwap.sellToken(
-      walletPrivateKey,
-      tokenAddress,
-      tokenAmount,
-      slippagePercent * 100 // Convert percent to bps
-    );
+    try {
+      return await this.pumpSwap.sellToken(
+        walletPrivateKey,
+        tokenAddress,
+        tokenAmount,
+        slippagePercent
+      );
+    } catch (error: any) {
+      console.warn("⚠️ PumpPortal failed, trying Raydium...");
+      return await this.raydiumSwap.sellToken(
+        walletPrivateKey,
+        tokenAddress,
+        tokenAmount,
+        slippagePercent * 100
+      );
+    }
   }
 
   // ===========================================
@@ -330,15 +357,31 @@ export class SolanaDEXService {
       const tokenInfo = await this.getTokenInfo(tokenAddress);
       
       if (!tokenInfo) {
-        console.log("⚠️ Could not fetch token info, proceeding with Raydium...");
+        console.log("⚠️ Could not fetch token info, trying PumpPortal first...");
       }
 
-      // All tokens now go through Raydium (Jupiter is blocked)
-      const isPumpToken = tokenInfo ? this.isPumpFunToken(tokenInfo) : false;
+      const isPumpToken = tokenInfo ? this.isPumpFunToken(tokenInfo) : true;
       const slippage = isPumpToken ? Math.max(slippagePercent, 10) : slippagePercent;
       
-      console.log(`🎯 Routing to Raydium with ${slippage}% slippage`);
-      
+      // Try PumpPortal first for PumpSwap/Pump.fun tokens
+      if (isPumpToken) {
+        try {
+          console.log(`🎯 Token is on PumpSwap - using PumpPortal with ${slippage}% slippage`);
+          const result = await this.pumpSwap.buyToken(
+            walletPrivateKey,
+            tokenAddress,
+            solAmount,
+            slippage
+          );
+          if (result) return result;
+        } catch (pumpError: any) {
+          console.warn("⚠️ PumpPortal failed:", pumpError.message);
+          console.log("🔄 Falling back to Raydium...");
+        }
+      }
+
+      // Fall back to Raydium for non-PumpSwap tokens or if PumpPortal fails
+      console.log(`🌟 Trying Raydium with ${slippage}% slippage`);
       return await this.raydiumSwap.buyToken(
         walletPrivateKey,
         tokenAddress,
@@ -364,15 +407,31 @@ export class SolanaDEXService {
       const tokenInfo = await this.getTokenInfo(tokenAddress);
       
       if (!tokenInfo) {
-        console.log("⚠️ Could not fetch token info, proceeding with Raydium...");
+        console.log("⚠️ Could not fetch token info, trying PumpPortal first...");
       }
 
-      // All tokens now go through Raydium (Jupiter is blocked)
-      const isPumpToken = tokenInfo ? this.isPumpFunToken(tokenInfo) : false;
+      const isPumpToken = tokenInfo ? this.isPumpFunToken(tokenInfo) : true;
       const slippage = isPumpToken ? Math.max(slippagePercent, 5) : slippagePercent;
       
-      console.log(`🎯 Routing to Raydium with ${slippage}% slippage`);
-      
+      // Try PumpPortal first for PumpSwap/Pump.fun tokens
+      if (isPumpToken) {
+        try {
+          console.log(`🎯 Token is on PumpSwap - using PumpPortal with ${slippage}% slippage`);
+          const result = await this.pumpSwap.sellToken(
+            walletPrivateKey,
+            tokenAddress,
+            tokenAmount,
+            slippage
+          );
+          if (result) return result;
+        } catch (pumpError: any) {
+          console.warn("⚠️ PumpPortal failed:", pumpError.message);
+          console.log("🔄 Falling back to Raydium...");
+        }
+      }
+
+      // Fall back to Raydium
+      console.log(`🌟 Trying Raydium with ${slippage}% slippage`);
       return await this.raydiumSwap.sellToken(
         walletPrivateKey,
         tokenAddress,

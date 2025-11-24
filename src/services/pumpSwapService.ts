@@ -41,6 +41,18 @@ export class PumpSwapService {
 
       const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
 
+      console.log("📡 Requesting transaction from PumpPortal...");
+      console.log("Request body:", {
+        publicKey: wallet.publicKey.toBase58(),
+        action: "buy",
+        mint: tokenMint,
+        amount: solAmount, // SOL amount directly (not lamports)
+        denominatedInSol: "true",
+        slippage: slippagePercent,
+        priorityFee: 0.0005,
+        pool: "pump", // Use pump pool specifically
+      });
+
       // Get trade transaction from PumpPortal
       const response = await axios.post(
         `${PUMP_PORTAL_API}/trade-local`,
@@ -48,11 +60,11 @@ export class PumpSwapService {
           publicKey: wallet.publicKey.toBase58(),
           action: "buy",
           mint: tokenMint,
-          amount: solAmount * LAMPORTS_PER_SOL, // Amount in lamports
+          amount: solAmount, // SOL amount (e.g., 0.01)
           denominatedInSol: "true",
           slippage: slippagePercent,
           priorityFee: 0.0005, // 0.0005 SOL priority fee
-          pool: "auto", // Auto-detect pool (pump or raydium)
+          pool: "pump", // Force pump pool for PumpSwap tokens
         },
         {
           timeout: 30000,
@@ -117,7 +129,11 @@ export class PumpSwapService {
         tokensReceived,
       };
     } catch (error: any) {
-      console.error("❌ PumpPortal buy failed:", error.response?.data || error.message);
+      console.error("❌ PumpPortal buy failed:", {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+      });
       throw error;
     }
   }
@@ -139,6 +155,8 @@ export class PumpSwapService {
       // Convert to string if number
       const amount = typeof tokenAmount === "number" ? tokenAmount.toString() : tokenAmount;
 
+      console.log("📡 Requesting sell transaction from PumpPortal...");
+
       const response = await axios.post(
         `${PUMP_PORTAL_API}/trade-local`,
         {
@@ -149,7 +167,7 @@ export class PumpSwapService {
           denominatedInSol: "false",
           slippage: slippagePercent,
           priorityFee: 0.0005,
-          pool: "auto",
+          pool: "pump", // Force pump pool
         },
         {
           timeout: 30000,
@@ -198,7 +216,11 @@ export class PumpSwapService {
         solReceived,
       };
     } catch (error: any) {
-      console.error("❌ PumpPortal sell failed:", error.response?.data || error.message);
+      console.error("❌ PumpPortal sell failed:", {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+      });
       throw error;
     }
   }

@@ -1,4 +1,5 @@
 // bot/handlers/callbacks.ts - COMPLETE VERSION WITH ALL HANDLERS
+// ✅ UPDATED: Now resolves DexScreener pair addresses to token mint addresses
 import { Context, Markup } from "telegraf";
 import * as userService from "../../services/userService";
 import * as exchangeService from "../../services/exchangeService";
@@ -14,6 +15,7 @@ import {
 } from "../features/tokenDisplay";
 import { handleWalletCallbacks } from "./walletCallbacks";
 import * as cexHandlers from "./cexHandlers";
+import { resolveTokenAddress, ResolvedToken } from "../../utils/dexscreenerResolver";
 
 // Store user states for multi-step operations
 export const userStates = new Map<number, any>();
@@ -726,8 +728,7 @@ export async function handleMemecoinAmountSelection(
   );
 }
 
-// IMPROVED handleConfirmBuy with better error handling and 0.5% fee
-
+// ✅ UPDATED handleConfirmBuy with DexScreener pair address resolution
 export async function handleConfirmBuy(
   ctx: Context,
   tokenAddress: string,
@@ -750,7 +751,7 @@ export async function handleConfirmBuy(
   console.log('✅ Answered callback query');
 
   const loadingMessage = await ctx.editMessageText(
-    "⏳ *Executing Trade...*\n\nThis may take 10-15 seconds.\n\n🔄 Processing...",
+    "⏳ *Resolving Token...*\n\nChecking if this is a pair or token address...",
     { parse_mode: "Markdown" }
   );
   console.log('✅ Sent loading message');
@@ -768,6 +769,46 @@ export async function handleConfirmBuy(
   console.log('📝 Message ID:', messageId);
 
   try {
+    console.log('🔍 Resolving token address...');
+    
+    // ✅ NEW: Resolve pair address to token mint address
+    const resolved = await resolveTokenAddress(tokenAddress);
+    
+    if (!resolved) {
+      throw new Error(
+        `Could not resolve token address.\n\n` +
+        `The address may be:\n` +
+        `• A token with no liquidity\n` +
+        `• An invalid address\n` +
+        `• A new token not yet indexed`
+      );
+    }
+    
+    // ✅ Use the resolved token address for trading
+    const actualTokenAddress = resolved.tokenAddress;
+    console.log('✅ Resolved token:', {
+      input: tokenAddress,
+      tokenMint: actualTokenAddress,
+      pairAddress: resolved.pairAddress,
+      symbol: resolved.symbol,
+      exchange: resolved.exchange,
+      liquidity: resolved.liquidity
+    });
+    
+    // Update message with resolution info
+    await ctx.telegram.editMessageText(
+      chatId,
+      messageId,
+      undefined,
+      `⏳ *Executing Trade...*\n\n` +
+      `Token: ${resolved.symbol}\n` +
+      `Address: \`${actualTokenAddress.slice(0, 8)}...${actualTokenAddress.slice(-6)}\`\n` +
+      `Exchange: ${resolved.exchange}\n` +
+      `Liquidity: $${resolved.liquidity.toLocaleString()}\n\n` +
+      `🔄 Processing swap...`,
+      { parse_mode: "Markdown" }
+    );
+
     console.log('🚀 Starting trade execution...');
     
     const user = await userService.getUserByTelegramId(userId);
@@ -807,17 +848,20 @@ export async function handleConfirmBuy(
       return;
     }
 
-    console.log('📊 Getting token info...');
-    const tokenInfo = await dexService.getTokenInfo(tokenAddress);
-    console.log('✅ Token info:', tokenInfo ? JSON.stringify(tokenInfo) : 'Not found');
-    
-    if (!tokenInfo || !tokenInfo.price) {
-      throw new Error("Token not available");
-    }
+    // ✅ Use resolved token info instead of fetching again
+    const tokenInfo = {
+      symbol: resolved.symbol,
+      name: resolved.name,
+      price: resolved.price,
+      liquidity: resolved.liquidity,
+      exchange: resolved.exchange,
+      decimals: 9, // Default for most Solana tokens
+    };
 
-    // ✅ DETECT but don't block yet
-    const isPumpFun = dexService.isPumpFunToken(tokenInfo);
-    console.log('🔍 Is Pump.fun?', isPumpFun, 'Exchange:', tokenInfo.exchange);
+    // ✅ Detect token type from resolved exchange
+    const isPumpFun = resolved.exchange?.toLowerCase().includes('pump') || 
+                      resolved.exchange?.toLowerCase().includes('pumpswap');
+    console.log('🔍 Is Pump.fun?', isPumpFun, 'Exchange:', resolved.exchange);
 
     console.log('💸 Calculating fees...');
     const FEE_PERCENTAGE = 0.005;
@@ -833,19 +877,19 @@ export async function handleConfirmBuy(
       `⏳ *Executing Swap...*\n\n` +
       `Token: ${tokenInfo.symbol}\n` +
       `Amount: ${tradingAmount.toFixed(4)} SOL\n` +
-      `Exchange: ${tokenInfo.exchange || 'Unknown'}\n\n` +
+      `Exchange: ${resolved.exchange}\n\n` +
       `⚠️ This may take 15-30 seconds...`,
       { parse_mode: "Markdown" }
     );
 
-    console.log('🔄 Attempting swap via Jupiter...');
+    console.log('🔄 Attempting swap...');
     
-    // ✅ TRY JUPITER FOR ALL TOKENS (including pumpswap)
+    // ✅ TRY SWAP WITH ACTUAL TOKEN ADDRESS
     let result;
     try {
       result = await dexService.buyMemecoin(
         privateKey,
-        tokenAddress,
+        actualTokenAddress,  // ✅ Use resolved token mint address
         tradingAmount,
         isPumpFun ? 10 : 1  // Higher slippage for Pump.fun
       );
@@ -853,12 +897,12 @@ export async function handleConfirmBuy(
     } catch (swapError: any) {
       console.error('❌ Swap error:', swapError.message);
       
-      // ✅ ONLY NOW show helpful error based on token type
+      // ✅ Show helpful error based on token type
       if (isPumpFun) {
         throw new Error(
           `🎯 This Pump.fun token cannot be traded via Jupiter yet.\n\n` +
           `Token: ${tokenInfo.symbol}\n` +
-          `Liquidity: $${tokenInfo.liquidity?.toFixed(2)}\n\n` +
+          `Liquidity: $${resolved.liquidity.toLocaleString()}\n\n` +
           `Options:\n` +
           `• Trade directly on pump.fun\n` +
           `• Wait for it to graduate to Raydium\n` +
@@ -866,7 +910,7 @@ export async function handleConfirmBuy(
         );
       } else {
         throw new Error(
-          `Jupiter swap failed: ${swapError.message}\n\n` +
+          `Swap failed: ${swapError.message}\n\n` +
           `This token may have:\n` +
           `• Low liquidity\n` +
           `• High price impact\n` +
@@ -899,7 +943,7 @@ export async function handleConfirmBuy(
     await tradeService.createMemecoinTrade(
       user.id,
       userId,
-      tokenAddress,
+      actualTokenAddress,  // ✅ Save actual token mint address
       tokenInfo.symbol,
       tokenInfo.decimals,
       "buy",
@@ -1007,10 +1051,8 @@ export async function handleMemecoinSellButton(
     {
       parse_mode: "Markdown",
       ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback("✅ Sell All", `confirm_sell_${tokenAddress}`),
-          Markup.button.callback("❌ Cancel", "meme_positions"),
-        ],
+        [Markup.button.callback("✅ Sell All", `confirm_sell_${tokenAddress}`)],
+        [Markup.button.callback("❌ Cancel", "meme_positions")],
       ]),
     }
   );
@@ -1107,7 +1149,7 @@ export async function handleMemecoinMenu(ctx: Context) {
     message += `• Jupiter DEX\n`;
     message += `• Auto TP/SL\n`;
     message += `• Real-time prices\n\n`;
-    message += `💡 *Tip:* Paste any token address!\n\n`;
+    message += `💡 *Tip:* Paste any token address or DexScreener link!\n\n`;
     message += `Select an option:`;
   } else {
     message += `🔴 No Wallet\n\n`;
@@ -1162,7 +1204,7 @@ export async function handleMemecoinBuy(ctx: Context) {
   userStates.set(userId, { action: "buy_memecoin_search" });
 
   await ctx.editMessageText(
-    `💎 *Buy Memecoin*\n\n` + `Send token address or name.`,
+    `💎 *Buy Memecoin*\n\n` + `Send token address or DexScreener link.`,
     {
       parse_mode: "Markdown",
       ...Markup.inlineKeyboard([

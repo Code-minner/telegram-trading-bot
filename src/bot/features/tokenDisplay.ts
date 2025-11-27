@@ -1,9 +1,10 @@
-// bot/features/tokenDisplay.ts - COMPLETE FIXED VERSION WITH NEW WALLET SYSTEM
+// bot/features/tokenDisplay.ts - COMPLETE FIXED VERSION WITH DEXSCREENER RESOLVER
 import axios from "axios";
 import { Context, Markup } from "telegraf";
 import { dexService } from "../../services/dexService";
 import * as riskManager from "../../utils/riskManager";
 import * as userService from "../../services/userService";
+import { resolveTokenAddress, isDexScreenerUrl, extractAddressFromUrl } from "../../utils/dexscreenerResolver";
 
 /**
  * Checks if text is a valid Solana token address
@@ -11,6 +12,13 @@ import * as userService from "../../services/userService";
 function isSolanaAddress(text: string): boolean {
   const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
   return solanaAddressRegex.test(text);
+}
+
+/**
+ * Checks if text is a DexScreener URL
+ */
+function isDexScreenerLink(text: string): boolean {
+  return text.includes("dexscreener.com/solana/");
 }
 
 /**
@@ -45,6 +53,7 @@ function getChartImageUrl(pairAddress: string): string {
 
 /**
  * Handles token address messages - displays token info
+ * ✅ NOW HANDLES: DexScreener URLs, pair addresses, and token addresses
  * Returns true if it handled a token address, false otherwise
  */
 export async function handleTokenAddressMessage(
@@ -52,13 +61,56 @@ export async function handleTokenAddressMessage(
   text: string,
   userId: number
 ): Promise<boolean> {
-  if (!isSolanaAddress(text)) {
+  // Check if it's a DexScreener URL or Solana address
+  const isDexUrl = isDexScreenerLink(text);
+  const isAddress = isSolanaAddress(text);
+  
+  if (!isDexUrl && !isAddress) {
     return false;
   }
 
   try {
-    const loadingMsg = await ctx.reply("🔍 Fetching token info...");
-    const tokenInfo = await dexService.getTokenInfo(text);
+    const loadingMsg = await ctx.reply("🔍 Resolving token...");
+    
+    // ✅ NEW: Resolve the input to get actual token address
+    let tokenAddress: string;
+    let resolvedInfo: any = null;
+    
+    if (isDexUrl || isAddress) {
+      console.log(`🔍 Resolving input: ${text.slice(0, 50)}...`);
+      
+      resolvedInfo = await resolveTokenAddress(text);
+      
+      if (!resolvedInfo) {
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          loadingMsg.message_id,
+          undefined,
+          "❌ Could not resolve token.\n\n" +
+          "This might be:\n" +
+          "• A token with no liquidity\n" +
+          "• An invalid address\n" +
+          "• A new token not yet indexed"
+        );
+        return true;
+      }
+      
+      tokenAddress = resolvedInfo.tokenAddress;
+      console.log(`✅ Resolved to token: ${tokenAddress} (${resolvedInfo.symbol})`);
+      
+      // Update loading message
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        loadingMsg.message_id,
+        undefined,
+        `🔍 Found ${resolvedInfo.symbol}! Loading details...`
+      );
+    } else {
+      tokenAddress = text;
+    }
+    
+    // Get full token info using resolved address
+    const tokenInfo = await dexService.getTokenInfo(tokenAddress);
 
     if (!tokenInfo) {
       await ctx.telegram.editMessageText(
@@ -70,17 +122,25 @@ export async function handleTokenAddressMessage(
       return true;
     }
 
-    const security = await getTokenSecurity(text);
-    const price = await dexService.getTokenPrice(text);
+    // ✅ Merge resolved info with token info for better accuracy
+    if (resolvedInfo) {
+      tokenInfo.pairAddress = tokenInfo.pairAddress || resolvedInfo.pairAddress;
+      tokenInfo.exchange = tokenInfo.exchange || resolvedInfo.exchange;
+    }
+
+    const security = await getTokenSecurity(tokenAddress);
+    const price = tokenInfo.price || await dexService.getTokenPrice(tokenAddress);
     const message = formatEnhancedTokenDisplay(tokenInfo, price, security);
 
     // Try to send with chart
     let sentWithChart = false;
-    if (tokenInfo.pairAddress) {
+    const pairAddr = tokenInfo.pairAddress || resolvedInfo?.pairAddress;
+    
+    if (pairAddr) {
       const chartUrls = [
-        `https://dd.dexscreener.com/ds-data/pairs/solana/${tokenInfo.pairAddress}.png`,
-        `https://dd.dexscreener.com/ds-data/pairs/solana/${tokenInfo.pairAddress}.jpg`,
-        `https://api.dexscreener.com/chart/solana/${tokenInfo.pairAddress}`,
+        `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddr}.png`,
+        `https://dd.dexscreener.com/ds-data/pairs/solana/${pairAddr}.jpg`,
+        `https://api.dexscreener.com/chart/solana/${pairAddr}`,
       ];
 
       for (const chartUrl of chartUrls) {
@@ -92,7 +152,7 @@ export async function handleTokenAddressMessage(
             {
               caption: message,
               parse_mode: "Markdown",
-              ...getEnhancedTokenMenu(text, tokenInfo, userId),
+              ...getEnhancedTokenMenu(tokenAddress, tokenInfo, userId),  // ✅ Use resolved token address
             }
           );
 
@@ -115,11 +175,11 @@ export async function handleTokenAddressMessage(
           parse_mode: "Markdown",
           link_preview_options: {
             is_disabled: false,
-            url: `https://mevx.io/solana/${text}`,
+            url: `https://mevx.io/solana/${tokenAddress}`,
             prefer_large_media: true,
             show_above_text: true,
           },
-          ...getEnhancedTokenMenu(text, tokenInfo, userId),
+          ...getEnhancedTokenMenu(tokenAddress, tokenInfo, userId),  // ✅ Use resolved token address
         }
       );
     }
@@ -221,6 +281,7 @@ function formatEnhancedTokenDisplay(
 
 /**
  * Creates enhanced menu with all options
+ * ✅ IMPORTANT: tokenAddress should be the actual token mint address, NOT pair address
  */
 function getEnhancedTokenMenu(
   tokenAddress: string,
@@ -263,6 +324,7 @@ function getEnhancedTokenMenu(
     Markup.button.callback("📍 Track", `track_${tokenAddress}`),
   ]);
 
+  // ✅ Buy/Sell buttons use the actual token address (not pair address)
   buttons.push([
     Markup.button.callback("🟢 Buy", `enhancedbuy_${tokenAddress}`),
     Markup.button.callback("🔴 Sell", `enhancedsell_${tokenAddress}`),

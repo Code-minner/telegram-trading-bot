@@ -1,5 +1,5 @@
 // src/services/pumpSwapService.ts
-// For trading tokens on PumpSwap (Pump.fun's AMM)
+// For trading tokens on PumpSwap (Pump.fun's AMM) and bonding curve
 
 import {
   Connection,
@@ -20,6 +20,13 @@ import bs58 from "bs58";
 // PumpPortal API for PumpSwap trades
 const PUMP_PORTAL_API = "https://pumpportal.fun/api";
 
+// Pool types supported by PumpPortal
+// - 'pump' = bonding curve (pre-graduation)
+// - 'pump-amm' = PumpSwap AMM (post-graduation)  
+// - 'raydium' = Raydium pools
+// - 'auto' = Let PumpPortal detect the correct pool
+export type PumpPoolType = 'pump' | 'pump-amm' | 'raydium' | 'raydium-cpmm' | 'launchlab' | 'bonk' | 'auto';
+
 export class PumpSwapService {
   private connection: Connection;
 
@@ -28,29 +35,75 @@ export class PumpSwapService {
   }
 
   // =====================================================
-  // BUY via PumpPortal (supports PumpSwap)
+  // DETECT POOL TYPE FROM EXCHANGE INFO
+  // =====================================================
+  
+  /**
+   * Determines the correct pool type based on the exchange/dex info
+   * @param exchange - The exchange name from DexScreener (e.g., 'pumpswap', 'pump.fun', 'raydium')
+   * @returns The appropriate pool parameter for PumpPortal API
+   */
+  getPoolType(exchange?: string): PumpPoolType {
+    if (!exchange) return 'auto';
+    
+    const ex = exchange.toLowerCase();
+    
+    // Token is on PumpSwap AMM (graduated from bonding curve)
+    if (ex === 'pumpswap' || ex === 'pump-amm' || ex === 'pumpfun-amm') {
+      console.log('🎯 Detected PumpSwap AMM - using pool: pump-amm');
+      return 'pump-amm';
+    }
+    
+    // Token is still on Pump.fun bonding curve (not graduated)
+    if (ex === 'pump.fun' || ex === 'pump' || ex === 'pumpfun') {
+      console.log('🎯 Detected Pump.fun bonding curve - using pool: pump');
+      return 'pump';
+    }
+    
+    // Token is on Raydium
+    if (ex === 'raydium' || ex === 'raydium-amm') {
+      console.log('🎯 Detected Raydium - using pool: raydium');
+      return 'raydium';
+    }
+    
+    if (ex === 'raydium-cpmm') {
+      console.log('🎯 Detected Raydium CPMM - using pool: raydium-cpmm');
+      return 'raydium-cpmm';
+    }
+    
+    // Default to auto - let PumpPortal figure it out
+    console.log(`🎯 Unknown exchange "${exchange}" - using pool: auto`);
+    return 'auto';
+  }
+
+  // =====================================================
+  // BUY via PumpPortal (supports PumpSwap + bonding curve)
   // =====================================================
   async buyToken(
     walletPrivateKey: string,
     tokenMint: string,
     solAmount: number,
-    slippagePercent: number = 25
+    slippagePercent: number = 25,
+    exchange?: string // Pass the exchange from token info for proper pool detection
   ): Promise<{ signature: string; tokensReceived: string } | null> {
     try {
       console.log(`🎯 Buying via PumpPortal: ${solAmount} SOL → ${tokenMint}`);
 
       const wallet = Keypair.fromSecretKey(bs58.decode(walletPrivateKey));
+      
+      // ✅ FIXED: Detect correct pool based on exchange
+      const pool = this.getPoolType(exchange);
 
       console.log("📡 Requesting transaction from PumpPortal...");
       console.log("Request body:", {
         publicKey: wallet.publicKey.toBase58(),
         action: "buy",
         mint: tokenMint,
-        amount: solAmount, // SOL amount directly (not lamports)
+        amount: solAmount,
         denominatedInSol: "true",
         slippage: slippagePercent,
         priorityFee: 0.0005,
-        pool: "pump", // Use pump pool specifically
+        pool: pool, // ✅ FIXED: Use detected pool type instead of hardcoded 'pump'
       });
 
       // Get trade transaction from PumpPortal
@@ -60,11 +113,11 @@ export class PumpSwapService {
           publicKey: wallet.publicKey.toBase58(),
           action: "buy",
           mint: tokenMint,
-          amount: solAmount, // SOL amount (e.g., 0.01)
+          amount: solAmount,
           denominatedInSol: "true",
           slippage: slippagePercent,
-          priorityFee: 0.0005, // 0.0005 SOL priority fee
-          pool: "pump", // Force pump pool for PumpSwap tokens
+          priorityFee: 0.0005,
+          pool: pool, // ✅ FIXED: Dynamic pool selection
         },
         {
           timeout: 30000,
@@ -145,7 +198,8 @@ export class PumpSwapService {
     walletPrivateKey: string,
     tokenMint: string,
     tokenAmount: number | string,
-    slippagePercent: number = 25
+    slippagePercent: number = 25,
+    exchange?: string // Pass the exchange from token info for proper pool detection
   ): Promise<{ signature: string; solReceived: string } | null> {
     try {
       console.log(`💰 Selling via PumpPortal: ${tokenAmount} tokens → SOL`);
@@ -154,8 +208,21 @@ export class PumpSwapService {
 
       // Convert to string if number
       const amount = typeof tokenAmount === "number" ? tokenAmount.toString() : tokenAmount;
+      
+      // ✅ FIXED: Detect correct pool based on exchange
+      const pool = this.getPoolType(exchange);
 
       console.log("📡 Requesting sell transaction from PumpPortal...");
+      console.log("Request body:", {
+        publicKey: wallet.publicKey.toBase58(),
+        action: "sell",
+        mint: tokenMint,
+        amount: amount,
+        denominatedInSol: "false",
+        slippage: slippagePercent,
+        priorityFee: 0.0005,
+        pool: pool,
+      });
 
       const response = await axios.post(
         `${PUMP_PORTAL_API}/trade-local`,
@@ -163,11 +230,11 @@ export class PumpSwapService {
           publicKey: wallet.publicKey.toBase58(),
           action: "sell",
           mint: tokenMint,
-          amount: amount, // Token amount in smallest units
+          amount: amount,
           denominatedInSol: "false",
           slippage: slippagePercent,
           priorityFee: 0.0005,
-          pool: "pump", // Force pump pool
+          pool: pool, // ✅ FIXED: Dynamic pool selection
         },
         {
           timeout: 30000,
@@ -208,8 +275,7 @@ export class PumpSwapService {
 
       console.log("✅ PumpPortal sell complete!");
 
-      // Get SOL balance change (approximate)
-      const solReceived = "0"; // Would need to calculate from transaction
+      const solReceived = "0";
 
       return {
         signature,
@@ -223,6 +289,29 @@ export class PumpSwapService {
       });
       throw error;
     }
+  }
+
+  // =====================================================
+  // SIMPLIFIED BUY/SELL WITH AUTO POOL DETECTION
+  // These methods use 'auto' pool for maximum compatibility
+  // =====================================================
+  
+  async buyTokenAuto(
+    walletPrivateKey: string,
+    tokenMint: string,
+    solAmount: number,
+    slippagePercent: number = 25
+  ): Promise<{ signature: string; tokensReceived: string } | null> {
+    return this.buyToken(walletPrivateKey, tokenMint, solAmount, slippagePercent, 'auto');
+  }
+
+  async sellTokenAuto(
+    walletPrivateKey: string,
+    tokenMint: string,
+    tokenAmount: number | string,
+    slippagePercent: number = 25
+  ): Promise<{ signature: string; solReceived: string } | null> {
+    return this.sellToken(walletPrivateKey, tokenMint, tokenAmount, slippagePercent, 'auto');
   }
 }
 

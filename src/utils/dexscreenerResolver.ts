@@ -4,6 +4,7 @@
 import axios from "axios";
 
 const DEXSCREENER_API = "https://api.dexscreener.com/latest/dex";
+const PUMPFUN_API = "https://frontend-api.pump.fun";
 
 export interface ResolvedToken {
   tokenAddress: string;      // The actual token mint address (what you need for trading)
@@ -13,6 +14,10 @@ export interface ResolvedToken {
   exchange: string;
   liquidity: number;
   price: number;
+  // Pump.fun specific (optional)
+  bondingCurveProgress?: number;
+  isGraduated?: boolean;
+  raydiumPool?: string | null;
 }
 
 /**
@@ -139,6 +144,40 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
       }
     } catch (searchError: any) {
       console.log(`❌ Search also failed`);
+    }
+    
+    // ✅ NEW: Try Pump.fun API for tokens on bonding curve or recently graduated
+    try {
+      console.log(`🎯 Trying Pump.fun API...`);
+      const pumpResponse = await axios.get(
+        `${PUMPFUN_API}/coins/${address}`,
+        { timeout: 15000 }
+      );
+      
+      if (pumpResponse.data && pumpResponse.data.mint) {
+        const pumpData = pumpResponse.data;
+        console.log(`✅ Found on Pump.fun: ${pumpData.symbol}`);
+        
+        // Calculate bonding curve progress
+        const progress = pumpData.bonding_curve_progress || 0;
+        const isGraduated = progress >= 100 || pumpData.raydium_pool;
+        
+        return {
+          tokenAddress: pumpData.mint,
+          pairAddress: pumpData.bonding_curve || pumpData.associated_bonding_curve || address,
+          symbol: pumpData.symbol || "UNKNOWN",
+          name: pumpData.name || pumpData.symbol || "Unknown Token",
+          exchange: isGraduated ? "pumpswap" : "pump.fun",
+          liquidity: pumpData.usd_market_cap ? pumpData.usd_market_cap * 0.1 : 0, // Rough estimate
+          price: pumpData.price || 0,
+          // Extra pump.fun specific data
+          bondingCurveProgress: progress,
+          isGraduated: isGraduated,
+          raydiumPool: pumpData.raydium_pool || null,
+        };
+      }
+    } catch (pumpError: any) {
+      console.log(`ℹ️ Pump.fun API failed: ${pumpError.message}`);
     }
     
     // ✅ FALLBACK: If we couldn't resolve via DexScreener API, 

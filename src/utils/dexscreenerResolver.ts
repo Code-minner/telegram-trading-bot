@@ -141,12 +141,38 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
       console.log(`❌ Search also failed`);
     }
     
-    console.log(`❌ Could not resolve address: ${address}`);
-    return null;
+    // ✅ FALLBACK: If we couldn't resolve via DexScreener API, 
+    // assume it's a valid token address and return it as-is
+    // This allows trading new tokens that aren't indexed yet
+    console.log(`⚠️ Could not resolve via API, using address directly: ${address}`);
+    
+    return {
+      tokenAddress: address,  // Use as-is - might be token or pair
+      pairAddress: address,   // Same address
+      symbol: "UNKNOWN",
+      name: "Unknown Token",
+      exchange: "unknown",
+      liquidity: 0,
+      price: 0,
+    };
     
   } catch (error: any) {
     console.error(`❌ Error resolving token address:`, error.message);
-    return null;
+    
+    // ✅ Even on error, return the address as-is to allow trading attempts
+    const address = input.includes("dexscreener.com") 
+      ? (input.match(/solana\/([a-zA-Z0-9]+)/) || [])[1] || input
+      : input.trim().split("?")[0].split("#")[0];
+      
+    return {
+      tokenAddress: address,
+      pairAddress: address,
+      symbol: "UNKNOWN",
+      name: "Unknown Token", 
+      exchange: "unknown",
+      liquidity: 0,
+      price: 0,
+    };
   }
 }
 

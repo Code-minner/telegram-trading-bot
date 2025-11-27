@@ -81,30 +81,28 @@ export async function handleTokenAddressMessage(
       
       resolvedInfo = await resolveTokenAddress(text);
       
-      if (!resolvedInfo) {
+      // Resolver always returns something now (falls back to using address as-is)
+      tokenAddress = resolvedInfo!.tokenAddress;
+      console.log(`✅ Resolved to token: ${tokenAddress} (${resolvedInfo.symbol})`);
+      
+      // If resolver returned UNKNOWN, we're using the address as-is
+      // Still try to get token info from dexService
+      if (resolvedInfo.symbol === "UNKNOWN") {
         await ctx.telegram.editMessageText(
           ctx.chat!.id,
           loadingMsg.message_id,
           undefined,
-          "❌ Could not resolve token.\n\n" +
-          "This might be:\n" +
-          "• A token with no liquidity\n" +
-          "• An invalid address\n" +
-          "• A new token not yet indexed"
+          `🔍 Checking token...`
         );
-        return true;
+      } else {
+        // Update loading message with resolved info
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          loadingMsg.message_id,
+          undefined,
+          `🔍 Found ${resolvedInfo.symbol}! Loading details...`
+        );
       }
-      
-      tokenAddress = resolvedInfo.tokenAddress;
-      console.log(`✅ Resolved to token: ${tokenAddress} (${resolvedInfo.symbol})`);
-      
-      // Update loading message
-      await ctx.telegram.editMessageText(
-        ctx.chat!.id,
-        loadingMsg.message_id,
-        undefined,
-        `🔍 Found ${resolvedInfo.symbol}! Loading details...`
-      );
     } else {
       tokenAddress = text;
     }

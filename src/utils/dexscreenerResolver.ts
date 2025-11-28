@@ -51,11 +51,19 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
     // =====================================================
     // STEP 1: Try DexScreener PAIRS endpoint (for pair addresses)
     // =====================================================
+    const axiosConfig = {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+      }
+    };
+    
     try {
       console.log(`📡 [1/5] Trying DexScreener pairs endpoint...`);
       const pairResponse = await axios.get(
         `${DEXSCREENER_API}/pairs/solana/${address}`,
-        { timeout: 15000 }
+        axiosConfig
       );
       
       if (pairResponse.data?.pair) {
@@ -85,7 +93,7 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
       console.log(`📡 [2/5] Trying DexScreener tokens endpoint...`);
       const tokenResponse = await axios.get(
         `${DEXSCREENER_API}/tokens/${address}`,
-        { timeout: 15000 }
+        axiosConfig
       );
       
       if (tokenResponse.data?.pairs && tokenResponse.data.pairs.length > 0) {
@@ -128,7 +136,7 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
       console.log(`📡 [3/5] Trying DexScreener search endpoint...`);
       const searchResponse = await axios.get(
         `${DEXSCREENER_API}/search/?q=${address}`,
-        { timeout: 15000 }
+        axiosConfig
       );
       
       const allPairs = searchResponse.data?.pairs || [];
@@ -241,7 +249,7 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
     }
     
     // =====================================================
-    // STEP 5: Try on-chain resolution for PumpSwap pools
+    // STEP 5: Try on-chain resolution for PumpSwap/Pump.fun pools
     // =====================================================
     try {
       console.log(`📡 [5/5] Trying on-chain resolution...`);
@@ -257,17 +265,18 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
       
       if (accountInfo) {
         const PUMPSWAP_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+        const PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
         const owner = accountInfo.owner.toBase58();
         
         console.log(`📡 Account owner: ${owner}`);
         
+        // Handle PumpSwap AMM pools
         if (owner === PUMPSWAP_PROGRAM) {
           console.log(`🎯 Detected PumpSwap pool address!`);
           
           const data = accountInfo.data;
           
           if (data.length >= 72) {
-            // Try to extract token mint from pool data
             const possibleOffsets = [8, 40, 72, 104];
             
             for (const offset of possibleOffsets) {
@@ -276,9 +285,8 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                   const mintBytes = data.slice(offset, offset + 32);
                   const possibleMint = new PublicKey(mintBytes).toBase58();
                   
-                  // Pump.fun tokens end with 'pump'
                   if (possibleMint.endsWith('pump')) {
-                    console.log(`✅ Found token mint from pool data: ${possibleMint}`);
+                    console.log(`✅ Found token mint from PumpSwap pool: ${possibleMint}`);
                     return {
                       tokenAddress: possibleMint,
                       pairAddress: address,
@@ -291,6 +299,39 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                   }
                 } catch {}
               }
+            }
+          }
+        }
+        
+        // ✅ NEW: Handle Pump.fun bonding curve accounts
+        if (owner === PUMPFUN_PROGRAM) {
+          console.log(`🎯 Detected Pump.fun bonding curve account!`);
+          
+          const data = accountInfo.data;
+          
+          // Pump.fun bonding curve layout - token mint is at offset 8
+          if (data.length >= 40) {
+            try {
+              // Try offset 8 first (most common for pump.fun)
+              const mintBytes = data.slice(8, 40);
+              const tokenMint = new PublicKey(mintBytes).toBase58();
+              
+              console.log(`✅ Found token mint from bonding curve: ${tokenMint}`);
+              
+              // Verify it looks like a valid pump.fun token (ends with 'pump')
+              const exchange = tokenMint.endsWith('pump') ? 'pumpswap' : 'pump.fun';
+              
+              return {
+                tokenAddress: tokenMint,
+                pairAddress: address,
+                symbol: "PUMP",
+                name: "Pump.fun Token",
+                exchange: exchange,
+                liquidity: 0,
+                price: 0,
+              };
+            } catch (e) {
+              console.log(`ℹ️ Could not parse bonding curve data`);
             }
           }
         }

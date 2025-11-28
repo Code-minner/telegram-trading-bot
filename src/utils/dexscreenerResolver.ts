@@ -48,8 +48,11 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
     
     console.log(`🔍 Resolving address: ${address}`);
     
-    // Try to get pair info first (in case it's a pair address)
+    // =====================================================
+    // STEP 1: Try DexScreener PAIRS endpoint (for pair addresses)
+    // =====================================================
     try {
+      console.log(`📡 [1/5] Trying DexScreener pairs endpoint...`);
       const pairResponse = await axios.get(
         `${DEXSCREENER_API}/pairs/solana/${address}`,
         { timeout: 15000 }
@@ -68,13 +71,18 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
           liquidity: parseFloat(pair.liquidity?.usd || "0"),
           price: parseFloat(pair.priceUsd || "0"),
         };
+      } else {
+        console.log(`ℹ️ Pairs endpoint returned no pair data`);
       }
     } catch (pairError: any) {
-      console.log(`ℹ️ Not a pair address, trying as token address...`);
+      console.log(`ℹ️ Pairs endpoint failed: ${pairError.message}`);
     }
     
-    // Try as token address
+    // =====================================================
+    // STEP 2: Try DexScreener TOKENS endpoint (for token addresses)
+    // =====================================================
     try {
+      console.log(`📡 [2/5] Trying DexScreener tokens endpoint...`);
       const tokenResponse = await axios.get(
         `${DEXSCREENER_API}/tokens/${address}`,
         { timeout: 15000 }
@@ -85,6 +93,8 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
         const solanaPairs = tokenResponse.data.pairs.filter(
           (p: any) => p.chainId === "solana"
         );
+        
+        console.log(`📡 Tokens endpoint found ${solanaPairs.length} Solana pairs`);
         
         if (solanaPairs.length > 0) {
           const pair = solanaPairs.sort(
@@ -104,61 +114,112 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
             price: parseFloat(pair.priceUsd || "0"),
           };
         }
+      } else {
+        console.log(`ℹ️ Tokens endpoint returned no pairs`);
       }
     } catch (tokenError: any) {
-      console.log(`ℹ️ Token endpoint failed, trying search...`);
+      console.log(`ℹ️ Tokens endpoint failed: ${tokenError.message}`);
     }
     
-    // Try search as last resort
+    // =====================================================
+    // STEP 3: Try DexScreener SEARCH endpoint
+    // =====================================================
     try {
+      console.log(`📡 [3/5] Trying DexScreener search endpoint...`);
       const searchResponse = await axios.get(
         `${DEXSCREENER_API}/search/?q=${address}`,
         { timeout: 15000 }
       );
       
-      if (searchResponse.data?.pairs && searchResponse.data.pairs.length > 0) {
-        const solanaPairs = searchResponse.data.pairs.filter(
+      const allPairs = searchResponse.data?.pairs || [];
+      console.log(`📡 Search found ${allPairs.length} total pairs`);
+      
+      if (allPairs.length > 0) {
+        const solanaPairs = allPairs.filter(
           (p: any) => p.chainId === "solana"
         );
         
+        console.log(`📡 Search found ${solanaPairs.length} Solana pairs`);
+        
         if (solanaPairs.length > 0) {
-          // Find the pair that matches our address (either as pair or token)
-          const matchingPair = solanaPairs.find(
-            (p: any) => 
-              p.pairAddress === address || 
-              p.baseToken.address === address
-          ) || solanaPairs[0];
+          // ✅ Check if our address matches the PAIR address
+          let matchingPair = solanaPairs.find(
+            (p: any) => p.pairAddress === address
+          );
           
-          console.log(`✅ Found via search: ${matchingPair.baseToken.symbol}`);
+          if (matchingPair) {
+            console.log(`✅ Found as pair address: ${matchingPair.baseToken.symbol}`);
+            return {
+              tokenAddress: matchingPair.baseToken.address,
+              pairAddress: matchingPair.pairAddress,
+              symbol: matchingPair.baseToken.symbol,
+              name: matchingPair.baseToken.name || matchingPair.baseToken.symbol,
+              exchange: matchingPair.dexId,
+              liquidity: parseFloat(matchingPair.liquidity?.usd || "0"),
+              price: parseFloat(matchingPair.priceUsd || "0"),
+            };
+          }
+          
+          // Check if it's a token address
+          matchingPair = solanaPairs.find(
+            (p: any) => p.baseToken.address === address
+          );
+          
+          if (matchingPair) {
+            console.log(`✅ Found as token address: ${matchingPair.baseToken.symbol}`);
+            return {
+              tokenAddress: address,
+              pairAddress: matchingPair.pairAddress,
+              symbol: matchingPair.baseToken.symbol,
+              name: matchingPair.baseToken.name || matchingPair.baseToken.symbol,
+              exchange: matchingPair.dexId,
+              liquidity: parseFloat(matchingPair.liquidity?.usd || "0"),
+              price: parseFloat(matchingPair.priceUsd || "0"),
+            };
+          }
+          
+          // Fallback to best match by liquidity
+          const bestPair = solanaPairs.sort(
+            (a: any, b: any) =>
+              parseFloat(b.liquidity?.usd || "0") - parseFloat(a.liquidity?.usd || "0")
+          )[0];
+          
+          console.log(`✅ Using best match: ${bestPair.baseToken.symbol}`);
           
           return {
-            tokenAddress: matchingPair.baseToken.address,
-            pairAddress: matchingPair.pairAddress,
-            symbol: matchingPair.baseToken.symbol,
-            name: matchingPair.baseToken.name || matchingPair.baseToken.symbol,
-            exchange: matchingPair.dexId,
-            liquidity: parseFloat(matchingPair.liquidity?.usd || "0"),
-            price: parseFloat(matchingPair.priceUsd || "0"),
+            tokenAddress: bestPair.baseToken.address,
+            pairAddress: bestPair.pairAddress,
+            symbol: bestPair.baseToken.symbol,
+            name: bestPair.baseToken.name || bestPair.baseToken.symbol,
+            exchange: bestPair.dexId,
+            liquidity: parseFloat(bestPair.liquidity?.usd || "0"),
+            price: parseFloat(bestPair.priceUsd || "0"),
           };
         }
       }
     } catch (searchError: any) {
-      console.log(`❌ Search also failed`);
+      console.log(`ℹ️ Search endpoint failed: ${searchError.message}`);
     }
     
-    // ✅ NEW: Try Pump.fun API for tokens on bonding curve or recently graduated
+    // =====================================================
+    // STEP 4: Try Pump.fun API (for bonding curve tokens)
+    // =====================================================
     try {
-      console.log(`🎯 Trying Pump.fun API...`);
+      console.log(`📡 [4/5] Trying Pump.fun API...`);
       const pumpResponse = await axios.get(
         `${PUMPFUN_API}/coins/${address}`,
-        { timeout: 15000 }
+        { 
+          timeout: 15000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          }
+        }
       );
       
       if (pumpResponse.data && pumpResponse.data.mint) {
         const pumpData = pumpResponse.data;
         console.log(`✅ Found on Pump.fun: ${pumpData.symbol}`);
         
-        // Calculate bonding curve progress
         const progress = pumpData.bonding_curve_progress || 0;
         const isGraduated = progress >= 100 || pumpData.raydium_pool;
         
@@ -168,9 +229,8 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
           symbol: pumpData.symbol || "UNKNOWN",
           name: pumpData.name || pumpData.symbol || "Unknown Token",
           exchange: isGraduated ? "pumpswap" : "pump.fun",
-          liquidity: pumpData.usd_market_cap ? pumpData.usd_market_cap * 0.1 : 0, // Rough estimate
+          liquidity: pumpData.usd_market_cap ? pumpData.usd_market_cap * 0.1 : 0,
           price: pumpData.price || 0,
-          // Extra pump.fun specific data
           bondingCurveProgress: progress,
           isGraduated: isGraduated,
           raydiumPool: pumpData.raydium_pool || null,
@@ -180,14 +240,73 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
       console.log(`ℹ️ Pump.fun API failed: ${pumpError.message}`);
     }
     
-    // ✅ FALLBACK: If we couldn't resolve via DexScreener API, 
-    // assume it's a valid token address and return it as-is
-    // This allows trading new tokens that aren't indexed yet
-    console.log(`⚠️ Could not resolve via API, using address directly: ${address}`);
+    // =====================================================
+    // STEP 5: Try on-chain resolution for PumpSwap pools
+    // =====================================================
+    try {
+      console.log(`📡 [5/5] Trying on-chain resolution...`);
+      
+      const { Connection, PublicKey } = await import("@solana/web3.js");
+      const connection = new Connection(
+        process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+        "confirmed"
+      );
+      
+      const pubkey = new PublicKey(address);
+      const accountInfo = await connection.getAccountInfo(pubkey);
+      
+      if (accountInfo) {
+        const PUMPSWAP_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+        const owner = accountInfo.owner.toBase58();
+        
+        console.log(`📡 Account owner: ${owner}`);
+        
+        if (owner === PUMPSWAP_PROGRAM) {
+          console.log(`🎯 Detected PumpSwap pool address!`);
+          
+          const data = accountInfo.data;
+          
+          if (data.length >= 72) {
+            // Try to extract token mint from pool data
+            const possibleOffsets = [8, 40, 72, 104];
+            
+            for (const offset of possibleOffsets) {
+              if (data.length >= offset + 32) {
+                try {
+                  const mintBytes = data.slice(offset, offset + 32);
+                  const possibleMint = new PublicKey(mintBytes).toBase58();
+                  
+                  // Pump.fun tokens end with 'pump'
+                  if (possibleMint.endsWith('pump')) {
+                    console.log(`✅ Found token mint from pool data: ${possibleMint}`);
+                    return {
+                      tokenAddress: possibleMint,
+                      pairAddress: address,
+                      symbol: "PUMP",
+                      name: "Pump.fun Token",
+                      exchange: "pumpswap",
+                      liquidity: 0,
+                      price: 0,
+                    };
+                  }
+                } catch {}
+              }
+            }
+          }
+        }
+      }
+    } catch (onChainError: any) {
+      console.log(`ℹ️ On-chain resolution failed: ${onChainError.message}`);
+    }
+    
+    // =====================================================
+    // FALLBACK: Return address as-is
+    // =====================================================
+    console.log(`⚠️ Could not resolve via any API, using address directly: ${address}`);
     
     return {
-      tokenAddress: address,  // Use as-is - might be token or pair
-      pairAddress: address,   // Same address
+      tokenAddress: address,
+      pairAddress: address,
       symbol: "UNKNOWN",
       name: "Unknown Token",
       exchange: "unknown",
@@ -198,7 +317,6 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
   } catch (error: any) {
     console.error(`❌ Error resolving token address:`, error.message);
     
-    // ✅ Even on error, return the address as-is to allow trading attempts
     const address = input.includes("dexscreener.com") 
       ? (input.match(/solana\/([a-zA-Z0-9]+)/) || [])[1] || input
       : input.trim().split("?")[0].split("#")[0];

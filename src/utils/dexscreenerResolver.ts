@@ -249,6 +249,41 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
     }
     
     // =====================================================
+    // STEP 4B: Try PumpPortal API (backup for Pump.fun data)
+    // =====================================================
+    try {
+      console.log(`📡 [4B/5] Trying PumpPortal token-info API...`);
+      const portalResponse = await axios.post(
+        'https://pumpportal.fun/api/token-info',
+        { address: address },
+        { 
+          timeout: 15000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+          }
+        }
+      );
+      
+      if (portalResponse.data && portalResponse.data.mint) {
+        const data = portalResponse.data;
+        console.log(`✅ Found via PumpPortal: ${data.symbol || data.mint}`);
+        
+        return {
+          tokenAddress: data.mint,
+          pairAddress: data.bondingCurve || address,
+          symbol: data.symbol || "PUMP",
+          name: data.name || "Pump.fun Token",
+          exchange: "pumpswap",
+          liquidity: 0,
+          price: data.price || 0,
+        };
+      }
+    } catch (portalError: any) {
+      console.log(`ℹ️ PumpPortal API failed: ${portalError.message}`);
+    }
+    
+    // =====================================================
     // STEP 5: Try on-chain resolution for PumpSwap/Pump.fun pools
     // =====================================================
     try {
@@ -276,91 +311,41 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
           
           const data = accountInfo.data;
           
-          if (data.length >= 72) {
-            const possibleOffsets = [8, 40, 72, 104];
-            
-            for (const offset of possibleOffsets) {
-              if (data.length >= offset + 32) {
-                try {
-                  const mintBytes = data.slice(offset, offset + 32);
-                  const possibleMint = new PublicKey(mintBytes).toBase58();
-                  
-                  if (possibleMint.endsWith('pump')) {
-                    console.log(`✅ Found token mint from PumpSwap pool: ${possibleMint}`);
-                    return {
-                      tokenAddress: possibleMint,
-                      pairAddress: address,
-                      symbol: "PUMP",
-                      name: "Pump.fun Token",
-                      exchange: "pumpswap",
-                      liquidity: 0,
-                      price: 0,
-                    };
-                  }
-                } catch {}
-              }
-            }
-          }
-        }
-        
-        // ✅ NEW: Handle Pump.fun bonding curve accounts
-        if (owner === PUMPFUN_PROGRAM) {
-          console.log(`🎯 Detected Pump.fun bonding curve account!`);
-          
-          const data = accountInfo.data;
-          console.log(`📡 Bonding curve data length: ${data.length}`);
-          
-          // Debug: Print first few possible addresses
-          console.log(`📡 Scanning for token mint...`);
-          
-          // Pump.fun bonding curve layout varies - try multiple offsets
-          // The token mint is usually a 32-byte public key somewhere in the data
-          const offsets = [8, 40, 72, 104, 136, 168, 200];
-          
-          for (const offset of offsets) {
-            if (data.length >= offset + 32) {
-              try {
-                const mintBytes = data.slice(offset, offset + 32);
-                const possibleMint = new PublicKey(mintBytes).toBase58();
-                
-                console.log(`   Offset ${offset}: ${possibleMint.slice(0, 20)}...`);
-                
-                // Skip system program (all 1s) and other invalid addresses
-                if (possibleMint === '11111111111111111111111111111111') continue;
-                if (possibleMint === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') continue;
-                if (possibleMint === 'So11111111111111111111111111111111111111112') continue;
-                
-                // Check if it looks like a pump.fun token (ends with 'pump')
-                if (possibleMint.endsWith('pump')) {
-                  console.log(`✅ Found token mint at offset ${offset}: ${possibleMint}`);
-                  return {
-                    tokenAddress: possibleMint,
-                    pairAddress: address,
-                    symbol: "PUMP",
-                    name: "Pump.fun Token",
-                    exchange: "pumpswap",
-                    liquidity: 0,
-                    price: 0,
-                  };
-                }
-              } catch {}
-            }
-          }
-          
-          // If no pump token found, try to find any valid non-system mint
-          console.log(`ℹ️ No pump token found at standard offsets, scanning all...`);
+          // Scan for any address ending with 'pump'
           for (let offset = 0; offset <= data.length - 32; offset += 8) {
             try {
               const mintBytes = data.slice(offset, offset + 32);
               const possibleMint = new PublicKey(mintBytes).toBase58();
               
-              // Skip known invalid addresses
-              if (possibleMint === '11111111111111111111111111111111') continue;
-              if (possibleMint === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') continue;
-              if (possibleMint === 'So11111111111111111111111111111111111111112') continue;
-              if (possibleMint.startsWith('1111111')) continue;
+              if (possibleMint.endsWith('pump')) {
+                console.log(`✅ Found token mint at offset ${offset}: ${possibleMint}`);
+                return {
+                  tokenAddress: possibleMint,
+                  pairAddress: address,
+                  symbol: "PUMP",
+                  name: "Pump.fun Token",
+                  exchange: "pumpswap",
+                  liquidity: 0,
+                  price: 0,
+                };
+              }
+            } catch {}
+          }
+        }
+        
+        // Handle Pump.fun bonding curve accounts
+        if (owner === PUMPFUN_PROGRAM) {
+          console.log(`🎯 Detected Pump.fun bonding curve account!`);
+          console.log(`📡 Bonding curve data length: ${accountInfo.data.length}`);
+          
+          const data = accountInfo.data;
+          
+          // Scan ALL offsets for any address ending with 'pump'
+          for (let offset = 0; offset <= data.length - 32; offset++) {
+            try {
+              const mintBytes = data.slice(offset, offset + 32);
+              const possibleMint = new PublicKey(mintBytes).toBase58();
               
-              // Found a valid-looking mint that ends with 'pump'
               if (possibleMint.endsWith('pump')) {
                 console.log(`✅ Found pump token at offset ${offset}: ${possibleMint}`);
                 return {
@@ -376,7 +361,7 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
             } catch {}
           }
           
-          console.log(`ℹ️ Could not find token mint in bonding curve data`);
+          console.log(`ℹ️ No pump token found in bonding curve data`);
         }
       }
     } catch (onChainError: any) {

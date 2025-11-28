@@ -124,17 +124,42 @@ export class PumpSwapService {
           headers: {
             "Content-Type": "application/json",
           },
+          responseType: 'arraybuffer', // ✅ FIX: Request raw bytes
         }
       );
 
-      if (!response.data) {
+      if (!response.data || response.data.length === 0) {
         throw new Error("No transaction returned from PumpPortal");
       }
 
-      console.log("✅ Got transaction from PumpPortal");
+      console.log("✅ Got transaction from PumpPortal, size:", response.data.byteLength || response.data.length);
 
-      // Deserialize and sign
-      const txBuf = Buffer.from(response.data, "base64");
+      // ✅ FIX: Handle different response formats with proper TypeScript types
+      let txBuf: Buffer;
+      
+      if (Buffer.isBuffer(response.data)) {
+        // Already a Buffer
+        txBuf = response.data;
+      } else if (response.data instanceof ArrayBuffer) {
+        // ArrayBuffer - use Uint8Array wrapper
+        txBuf = Buffer.from(new Uint8Array(response.data));
+      } else if (typeof response.data === 'string') {
+        // Response is base64 string
+        txBuf = Buffer.from(response.data, "base64");
+      } else {
+        // ArrayBuffer-like or typed array
+        txBuf = Buffer.from(new Uint8Array(response.data));
+      }
+      
+      // Check if buffer looks like an error message (starts with '{' or readable text)
+      const firstByte = txBuf[0];
+      if (firstByte === 123 || (firstByte >= 32 && firstByte <= 126)) { // '{' or printable ASCII
+        const possibleError = txBuf.toString('utf8').slice(0, 200);
+        if (possibleError.includes('error') || possibleError.includes('Error') || possibleError.includes('{')) {
+          console.error("❌ PumpPortal returned error:", possibleError);
+          throw new Error(`PumpPortal error: ${possibleError}`);
+        }
+      }
       let transaction: VersionedTransaction | Transaction;
 
       try {
@@ -241,16 +266,38 @@ export class PumpSwapService {
           headers: {
             "Content-Type": "application/json",
           },
+          responseType: 'arraybuffer', // ✅ FIX: Request raw bytes
         }
       );
 
-      if (!response.data) {
+      if (!response.data || response.data.length === 0) {
         throw new Error("No transaction returned from PumpPortal");
       }
 
-      console.log("✅ Got sell transaction from PumpPortal");
+      console.log("✅ Got sell transaction from PumpPortal, size:", response.data.byteLength || response.data.length);
 
-      const txBuf = Buffer.from(response.data, "base64");
+      // ✅ FIX: Handle different response formats with proper TypeScript types
+      let txBuf: Buffer;
+      
+      if (Buffer.isBuffer(response.data)) {
+        txBuf = response.data;
+      } else if (response.data instanceof ArrayBuffer) {
+        txBuf = Buffer.from(new Uint8Array(response.data));
+      } else if (typeof response.data === 'string') {
+        txBuf = Buffer.from(response.data, "base64");
+      } else {
+        txBuf = Buffer.from(new Uint8Array(response.data));
+      }
+      
+      // Check if buffer looks like an error message
+      const firstByte = txBuf[0];
+      if (firstByte === 123 || (firstByte >= 32 && firstByte <= 126)) {
+        const possibleError = txBuf.toString('utf8').slice(0, 200);
+        if (possibleError.includes('error') || possibleError.includes('Error') || possibleError.includes('{')) {
+          console.error("❌ PumpPortal returned error:", possibleError);
+          throw new Error(`PumpPortal error: ${possibleError}`);
+        }
+      }
       let transaction: VersionedTransaction | Transaction;
 
       try {

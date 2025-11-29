@@ -164,36 +164,58 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
     // =====================================================
     // STEP 3B: Try alternative Pump.fun APIs
     // =====================================================
+    console.log(`🔄 STEP 3B: Trying Pump.fun APIs...`);
+    
     const pumpApis = [
-      `https://client-api-2-74b1891ee9f9.herokuapp.com/coins/${address}`,
-      `https://pump-fun-api.vercel.app/api/coin/${address}`,
-      `https://api.pump.fun/coins/${address}`,
+      { url: `https://client-api-2-74b1891ee9f9.herokuapp.com/coins/${address}`, name: 'herokuapp' },
+      { url: `https://pump-fun-api.vercel.app/api/coin/${address}`, name: 'vercel' },
+      { url: `https://frontend-api.pump.fun/coins/${address}`, name: 'pump.fun-frontend' },
+      { url: `https://api.pump.fun/coins/${address}`, name: 'pump.fun-api' },
     ];
     
-    for (const apiUrl of pumpApis) {
+    for (const api of pumpApis) {
       try {
-        console.log(`📡 Trying: ${apiUrl.split('/')[2]}...`);
-        const response = await axios.get(apiUrl, { 
-          timeout: 10000,
-          headers: { 'User-Agent': 'Mozilla/5.0' }
+        console.log(`📡 API: ${api.name}...`);
+        const response = await axios.get(api.url, { 
+          timeout: 8000,
+          headers: { 
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://pump.fun',
+            'Referer': 'https://pump.fun/',
+          }
         });
         
+        console.log(`✅ ${api.name} responded! Status: ${response.status}`);
+        
         if (response.data?.mint) {
-          console.log(`✅ Found via alternative API: ${response.data.symbol || response.data.mint}`);
+          console.log(`🎉 SUCCESS! Found token: ${response.data.symbol} (${response.data.mint})`);
+          
+          const progress = response.data.bonding_curve_progress || 0;
+          const isGraduated = progress >= 100;
+          
           return {
             tokenAddress: response.data.mint,
-            pairAddress: response.data.bonding_curve || address,
+            pairAddress: response.data.bonding_curve || response.data.associated_bonding_curve || address,
             symbol: response.data.symbol || "PUMP",
             name: response.data.name || "Pump.fun Token",
-            exchange: "pumpswap",
-            liquidity: 0,
+            exchange: isGraduated ? "pumpswap" : "pump.fun",
+            liquidity: response.data.usd_market_cap ? response.data.usd_market_cap * 0.1 : 0,
             price: response.data.price || 0,
+            bondingCurveProgress: progress,
+            isGraduated: isGraduated,
           };
+        } else {
+          console.log(`⚠️ ${api.name}: Response OK but no mint field`);
         }
       } catch (e: any) {
-        // Continue to next API
+        const status = e.response?.status || 'NETWORK_ERROR';
+        const msg = e.message || 'Unknown error';
+        console.log(`❌ ${api.name} FAILED: ${status} - ${msg.slice(0, 50)}`);
       }
     }
+    
+    console.log(`⚠️ All Pump.fun APIs failed`);
     
     // =====================================================
     // STEP 4: Try on-chain resolution for PumpSwap pools
@@ -276,52 +298,50 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
           console.log(`ℹ️ No pump token found in bonding curve data`);
           
           // =====================================================
-          // REVERSE LOOKUP: The bonding curve is a PDA derived from the token mint
-          // We'll try to find the token by searching recent pump tokens
+          // REVERSE LOOKUP: Search trending pump tokens and check their bonding curves
           // =====================================================
-          console.log(`📡 Trying reverse lookup...`);
+          console.log(`📡 Trying reverse lookup on trending tokens...`);
           
           try {
-            // Derive what the bonding curve SHOULD be for common pump tokens
-            // The bonding curve PDA is: seeds = ["bonding-curve", token_mint]
             const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+            const checkedTokens = new Set<string>();
             
-            // Search for recent pump.fun tokens via DexScreener
-            const searchTerms = ['miracle', 'pump', 'fun', 'meme'];
+            // Search for trending/recent pump tokens
+            const searchTerms = ['pump', 'sol', 'meme', 'ai', 'trump', 'pepe', 'doge'];
             
             for (const term of searchTerms) {
               try {
                 const searchResp = await axios.get(
                   `${DEXSCREENER_API}/search/?q=${term}`,
-                  { ...axiosConfig, timeout: 8000 }
+                  { ...axiosConfig, timeout: 5000 }
                 );
                 
                 const pumpTokens = (searchResp.data?.pairs || [])
                   .filter((p: any) => 
                     p.chainId === "solana" && 
-                    p.baseToken?.address?.endsWith('pump') &&
-                    (p.dexId === 'pumpswap' || p.dexId === 'pump.fun')
+                    p.baseToken?.address?.endsWith('pump')
                   )
-                  .slice(0, 20);
+                  .slice(0, 50);
                 
                 for (const pair of pumpTokens) {
                   const tokenMint = pair.baseToken.address;
+                  if (checkedTokens.has(tokenMint)) continue;
+                  checkedTokens.add(tokenMint);
                   
-                  // Derive the expected bonding curve PDA
                   try {
-                    const [derivedBondingCurve] = PublicKey.findProgramAddressSync(
+                    const [derivedBC] = PublicKey.findProgramAddressSync(
                       [Buffer.from("bonding-curve"), new PublicKey(tokenMint).toBuffer()],
                       PUMP_PROGRAM
                     );
                     
-                    if (derivedBondingCurve.toBase58() === address) {
-                      console.log(`✅ Found matching token via reverse lookup: ${pair.baseToken.symbol}`);
+                    if (derivedBC.toBase58() === address) {
+                      console.log(`✅ Found via reverse lookup: ${pair.baseToken.symbol}`);
                       return {
                         tokenAddress: tokenMint,
                         pairAddress: address,
                         symbol: pair.baseToken.symbol,
                         name: pair.baseToken.name || pair.baseToken.symbol,
-                        exchange: pair.dexId,
+                        exchange: pair.dexId || "pump.fun",
                         liquidity: parseFloat(pair.liquidity?.usd || "0"),
                         price: parseFloat(pair.priceUsd || "0"),
                       };
@@ -330,6 +350,8 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                 }
               } catch {}
             }
+            
+            console.log(`📡 Checked ${checkedTokens.size} tokens, no match`);
           } catch (e) {
             console.log(`ℹ️ Reverse lookup failed`);
           }

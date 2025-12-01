@@ -244,6 +244,69 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
         console.log(`📡 Data length: ${accountInfo.data.length}`);
         
         // =====================================================
+        // Handle TOKEN MINT - derive bonding curve and get data
+        // =====================================================
+        const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        
+        if (owner === TOKEN_PROGRAM) {
+          console.log(`🎯 Detected token mint! Deriving bonding curve...`);
+          
+          // This is a token mint - derive its bonding curve
+          const [bondingCurve] = PublicKey.findProgramAddressSync(
+            [Buffer.from("bonding-curve"), pubkey.toBuffer()],
+            new PublicKey(PUMPFUN_PROGRAM)
+          );
+          
+          const bondingCurveAddress = bondingCurve.toBase58();
+          console.log(`📡 Derived bonding curve: ${bondingCurveAddress}`);
+          
+          // Check if bonding curve exists
+          const bcAccountInfo = await connection.getAccountInfo(bondingCurve);
+          
+          if (bcAccountInfo && bcAccountInfo.owner.toBase58() === PUMPFUN_PROGRAM) {
+            console.log(`✅ Bonding curve exists! Parsing data...`);
+            
+            // Parse bonding curve data
+            const curveData = await parseBondingCurveData(connection, bondingCurveAddress);
+            
+            if (curveData) {
+              // Get token metadata
+              const metadata = await getOnChainMetadata(connection, address);
+              
+              return {
+                tokenAddress: address,
+                pairAddress: bondingCurveAddress,
+                symbol: metadata?.symbol || "PUMP",
+                name: metadata?.name || "Pump.fun Token",
+                exchange: curveData.complete ? "pumpswap" : "pump.fun",
+                liquidity: curveData.pooledSol * 200,
+                price: curveData.priceUsd,
+                marketCap: curveData.marketCap,
+                bondingCurveProgress: curveData.bondingCurveProgress,
+                pooledSol: curveData.pooledSol,
+                isGraduated: curveData.complete,
+              };
+            }
+            
+            // Fallback - just get metadata
+            const metadata = await getOnChainMetadata(connection, address);
+            
+            return {
+              tokenAddress: address,
+              pairAddress: bondingCurveAddress,
+              symbol: metadata?.symbol || "PUMP",
+              name: metadata?.name || "Pump.fun Token",
+              exchange: "pump.fun",
+              liquidity: 0,
+              price: 0,
+              isGraduated: false,
+            };
+          } else {
+            console.log(`ℹ️ No Pump.fun bonding curve found for this token`);
+          }
+        }
+        
+        // =====================================================
         // Handle Pump.fun bonding curve - GET TOKEN VIA ASSOCIATED TOKEN ACCOUNTS
         // =====================================================
         if (owner === PUMPFUN_PROGRAM) {

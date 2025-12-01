@@ -1,10 +1,32 @@
-// bot/features/tokenDisplay.ts - COMPLETE FIXED VERSION WITH DEXSCREENER RESOLVER
+// bot/features/tokenDisplay.ts - COMPLETE FIXED VERSION WITH FULL PUMP.FUN DATA
 import axios from "axios";
 import { Context, Markup } from "telegraf";
 import { dexService } from "../../services/dexService";
 import * as riskManager from "../../utils/riskManager";
 import * as userService from "../../services/userService";
-import { resolveTokenAddress, isDexScreenerUrl, extractAddressFromUrl } from "../../utils/dexscreenerResolver";
+import { resolveTokenAddress, isDexScreenerUrl, extractAddressFromUrl, ResolvedToken } from "../../utils/dexscreenerResolver";
+
+// Extended token info type to handle all possible fields
+interface MergedTokenInfo {
+  address: string;
+  symbol: string;
+  name: string;
+  exchange: string;
+  price: number;
+  liquidity: number;
+  marketCap?: number;
+  pairAddress?: string;
+  bondingCurveProgress?: number;
+  pooledSol?: number;
+  isGraduated?: boolean;
+  priceChange24h?: number;
+  volume24h?: number;
+  dexscreenerUrl?: string;
+  ownerAddress?: string;
+  renounced?: boolean;
+  freezeRevoked?: boolean;
+  burn?: number;
+}
 
 /**
  * Checks if text is a valid Solana token address
@@ -53,7 +75,8 @@ function getChartImageUrl(pairAddress: string): string {
 
 /**
  * Handles token address messages - displays token info
- * ✅ NOW HANDLES: DexScreener URLs, pair addresses, and token addresses
+ * ✅ NOW HANDLES: DexScreener URLs, pair addresses, bonding curves, and token addresses
+ * ✅ NOW INCLUDES: Full Pump.fun data (price, progress, pooled SOL, market cap)
  * Returns true if it handled a token address, false otherwise
  */
 export async function handleTokenAddressMessage(
@@ -72,9 +95,9 @@ export async function handleTokenAddressMessage(
   try {
     const loadingMsg = await ctx.reply("🔍 Resolving token...");
     
-    // ✅ NEW: Resolve the input to get actual token address
+    // ✅ Resolve the input to get actual token address AND full token data
     let tokenAddress: string;
-    let resolvedInfo: any = null;
+    let resolvedInfo: ResolvedToken | null = null;
     
     if (isDexUrl || isAddress) {
       console.log(`🔍 Resolving input: ${text.slice(0, 50)}...`);
@@ -83,34 +106,55 @@ export async function handleTokenAddressMessage(
       
       // Resolver always returns something now (falls back to using address as-is)
       tokenAddress = resolvedInfo!.tokenAddress;
-      console.log(`✅ Resolved to token: ${tokenAddress} (${resolvedInfo.symbol})`);
+      console.log(`✅ Resolved to token: ${tokenAddress} (${resolvedInfo!.symbol})`);
       
-      // If resolver returned UNKNOWN, we're using the address as-is
-      // Still try to get token info from dexService
-      if (resolvedInfo.symbol === "UNKNOWN") {
+      // Update loading message with resolved info
+      if (resolvedInfo!.symbol && resolvedInfo!.symbol !== "UNKNOWN") {
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          loadingMsg.message_id,
+          undefined,
+          `🔍 Found ${resolvedInfo!.symbol}! Loading details...`
+        );
+      } else {
         await ctx.telegram.editMessageText(
           ctx.chat!.id,
           loadingMsg.message_id,
           undefined,
           `🔍 Checking token...`
         );
-      } else {
-        // Update loading message with resolved info
-        await ctx.telegram.editMessageText(
-          ctx.chat!.id,
-          loadingMsg.message_id,
-          undefined,
-          `🔍 Found ${resolvedInfo.symbol}! Loading details...`
-        );
       }
     } else {
       tokenAddress = text;
     }
     
-    // Get full token info using resolved address
+    // Get additional token info from dexService (for security info etc)
     const tokenInfo = await dexService.getTokenInfo(tokenAddress);
 
-    if (!tokenInfo) {
+    // ✅ IMPORTANT: Merge resolver data with dexService data
+    // Resolver data takes priority for pump.fun tokens since it queries pump APIs
+    const mergedInfo: MergedTokenInfo = {
+      address: tokenAddress,
+      symbol: resolvedInfo?.symbol || tokenInfo?.symbol || "UNKNOWN",
+      name: resolvedInfo?.name || tokenInfo?.name || "Unknown Token",
+      exchange: resolvedInfo?.exchange || tokenInfo?.exchange || "unknown",
+      price: resolvedInfo?.price || tokenInfo?.price || 0,
+      liquidity: resolvedInfo?.liquidity || tokenInfo?.liquidity || 0,
+      marketCap: resolvedInfo?.marketCap || (tokenInfo as any)?.marketCap || 0,
+      pairAddress: resolvedInfo?.pairAddress || tokenInfo?.pairAddress,
+      bondingCurveProgress: resolvedInfo?.bondingCurveProgress,
+      pooledSol: resolvedInfo?.pooledSol,
+      isGraduated: resolvedInfo?.isGraduated,
+      priceChange24h: (tokenInfo as any)?.priceChange24h || 0,
+      volume24h: (tokenInfo as any)?.volume24h || 0,
+      dexscreenerUrl: (tokenInfo as any)?.dexscreenerUrl,
+      ownerAddress: (tokenInfo as any)?.ownerAddress,
+      renounced: (tokenInfo as any)?.renounced,
+      freezeRevoked: (tokenInfo as any)?.freezeRevoked,
+      burn: (tokenInfo as any)?.burn,
+    };
+
+    if (!mergedInfo.symbol || mergedInfo.symbol === "UNKNOWN") {
       await ctx.telegram.editMessageText(
         ctx.chat!.id,
         loadingMsg.message_id,
@@ -120,19 +164,17 @@ export async function handleTokenAddressMessage(
       return true;
     }
 
-    // ✅ Merge resolved info with token info for better accuracy
-    if (resolvedInfo) {
-      tokenInfo.pairAddress = tokenInfo.pairAddress || resolvedInfo.pairAddress;
-      tokenInfo.exchange = tokenInfo.exchange || resolvedInfo.exchange;
-    }
-
     const security = await getTokenSecurity(tokenAddress);
-    const price = tokenInfo.price || await dexService.getTokenPrice(tokenAddress);
-    const message = formatEnhancedTokenDisplay(tokenInfo, price, security);
+    // Use pooledSol from resolver if available
+    if (resolvedInfo?.pooledSol) {
+      security.pooledSol = resolvedInfo.pooledSol;
+    }
+    
+    const message = formatEnhancedTokenDisplay(mergedInfo, mergedInfo.price, security);
 
     // Try to send with chart
     let sentWithChart = false;
-    const pairAddr = tokenInfo.pairAddress || resolvedInfo?.pairAddress;
+    const pairAddr = mergedInfo.pairAddress;
     
     if (pairAddr) {
       const chartUrls = [
@@ -150,7 +192,7 @@ export async function handleTokenAddressMessage(
             {
               caption: message,
               parse_mode: "Markdown",
-              ...getEnhancedTokenMenu(tokenAddress, tokenInfo, userId),  // ✅ Use resolved token address
+              ...getEnhancedTokenMenu(tokenAddress, mergedInfo, userId),
             }
           );
 
@@ -177,7 +219,7 @@ export async function handleTokenAddressMessage(
             prefer_large_media: true,
             show_above_text: true,
           },
-          ...getEnhancedTokenMenu(tokenAddress, tokenInfo, userId),  // ✅ Use resolved token address
+          ...getEnhancedTokenMenu(tokenAddress, mergedInfo, userId),
         }
       );
     }
@@ -192,9 +234,10 @@ export async function handleTokenAddressMessage(
 
 /**
  * Formats enhanced token information for display
+ * ✅ NOW INCLUDES: Bonding curve progress, pooled SOL, proper market cap
  */
 function formatEnhancedTokenDisplay(
-  tokenInfo: any,
+  tokenInfo: MergedTokenInfo,
   price: number,
   security: any
 ): string {
@@ -211,18 +254,34 @@ function formatEnhancedTokenDisplay(
     0,
     8
   )}...${tokenInfo.address.slice(-8)}\`\n`;
-  if (tokenInfo.pairAddress) {
+  if (tokenInfo.pairAddress && tokenInfo.pairAddress !== tokenInfo.address) {
     message += `🎁 *LP:* \`${tokenInfo.pairAddress.slice(
       0,
       8
     )}...${tokenInfo.pairAddress.slice(-8)}\`\n\n`;
+  } else {
+    message += `\n`;
   }
 
-  // Market data
+  // Exchange
   if (tokenInfo.exchange) {
     message += `🎯 *Exchange:* ${tokenInfo.exchange}\n`;
   }
 
+  // Price - format properly for small numbers
+  if (price > 0) {
+    if (price < 0.00000001) {
+      message += `💰 *Token Price:* $${price.toExponential(2)}\n`;
+    } else if (price < 0.0001) {
+      message += `💰 *Token Price:* $${price.toFixed(10)}\n`;
+    } else {
+      message += `💰 *Token Price:* $${price.toFixed(8)}\n`;
+    }
+  } else {
+    message += `💰 *Token Price:* $0.00000000\n`;
+  }
+
+  // Market data
   if (tokenInfo.marketCap && tokenInfo.marketCap > 0) {
     message += `💎 *Market Cap:* $${riskManager.formatAmount(
       tokenInfo.marketCap
@@ -235,22 +294,33 @@ function formatEnhancedTokenDisplay(
     )}\n`;
   }
 
-  message += `💰 *Token Price:* $${price.toFixed(8)}\n`;
+  // ✅ NEW: Pooled SOL (important for pump.fun tokens)
+  const pooledSol = tokenInfo.pooledSol || security.pooledSol;
+  if (pooledSol && pooledSol > 0) {
+    message += `🟡 *Pooled SOL:* ${pooledSol.toFixed(2)} SOL\n`;
+  }
+
+  // ✅ NEW: Bonding curve progress (for pump.fun tokens)
+  if (tokenInfo.bondingCurveProgress !== undefined) {
+    const progress = tokenInfo.bondingCurveProgress;
+    const progressBar = generateProgressBar(progress);
+    message += `📊 *Progress:* ${progress.toFixed(2)}%\n`;
+    message += `|${progressBar}|\n`;
+  }
+
+  // 24h stats
   message += `${priceChangeEmoji} *24h Change:* ${priceChangeSign}${priceChange24h.toFixed(
     2
   )}%\n`;
 
   if (tokenInfo.volume24h && tokenInfo.volume24h > 0) {
-    message += `📊 *24h Volume:* $${riskManager.formatAmount(
+    message += `📈 *24h Volume:* $${riskManager.formatAmount(
       tokenInfo.volume24h
     )}\n`;
   }
 
   // Security
   message += `\n`;
-  if (security.pooledSol > 0) {
-    message += `🎁 *Pooled SOL:* ${security.pooledSol.toFixed(1)}\n`;
-  }
   if (security.burn > 0) {
     message += `🔥 *Burn:* ${security.burn.toFixed(0)}%\n`;
   }
@@ -270,7 +340,7 @@ function formatEnhancedTokenDisplay(
     tokenInfo.ownerAddress || "OWNER_ADDRESS"
   })`;
 
-  if (tokenInfo.pairAddress) {
+  if (tokenInfo.pairAddress && tokenInfo.pairAddress !== tokenInfo.address) {
     message += ` | ⚖️ [Pair](https://solscan.io/account/${tokenInfo.pairAddress})`;
   }
 
@@ -278,12 +348,21 @@ function formatEnhancedTokenDisplay(
 }
 
 /**
+ * Generate a progress bar for bonding curve
+ */
+function generateProgressBar(progress: number): string {
+  const totalBars = 20;
+  const filledBars = Math.round((progress / 100) * totalBars);
+  const emptyBars = totalBars - filledBars;
+  return '█'.repeat(filledBars) + '░'.repeat(emptyBars);
+}
+
+/**
  * Creates enhanced menu with all options
- * ✅ IMPORTANT: tokenAddress should be the actual token mint address, NOT pair address
  */
 function getEnhancedTokenMenu(
   tokenAddress: string,
-  tokenInfo: any,
+  tokenInfo: MergedTokenInfo,
   userId: number
 ) {
   const buttons: any[][] = [];
@@ -322,7 +401,7 @@ function getEnhancedTokenMenu(
     Markup.button.callback("📍 Track", `track_${tokenAddress}`),
   ]);
 
-  // ✅ Buy/Sell buttons use the actual token address (not pair address)
+  // Buy/Sell buttons use the actual token address
   buttons.push([
     Markup.button.callback("🟢 Buy", `enhancedbuy_${tokenAddress}`),
     Markup.button.callback("🔴 Sell", `enhancedsell_${tokenAddress}`),
@@ -366,7 +445,7 @@ export function getEnhancedBuyMenu(tokenAddress: string, tokenInfo: any) {
     Markup.button.callback("🚀 Custom", `custombuy_${tokenAddress}`),
   ]);
 
-  // Wallet - FIXED TO USE NEW SYSTEM
+  // Wallet
   buttons.push([
     Markup.button.callback("💼 Select Wallet", `selectwallet_${tokenAddress}`),
   ]);
@@ -380,7 +459,7 @@ export function getEnhancedBuyMenu(tokenAddress: string, tokenInfo: any) {
 }
 
 /**
- * Show enhanced buy menu - FIXED WITH WALLET INFO
+ * Show enhanced buy menu
  */
 export async function showEnhancedBuyMenu(ctx: Context, tokenAddress: string) {
   const tokenInfo = await dexService.getTokenInfo(tokenAddress);
@@ -428,7 +507,7 @@ export async function showEnhancedBuyMenu(ctx: Context, tokenAddress: string) {
 }
 
 /**
- * Wallet selection menu - FIXED FOR NEW WALLET SYSTEM
+ * Wallet selection menu
  */
 export async function showWalletSelection(
   ctx: Context,
@@ -436,14 +515,10 @@ export async function showWalletSelection(
   userId: number
 ) {
   try {
-    // Import wallet service functions
     const { getUserWallets } = require('../../services/walletService');
-    
-    // Get all wallets from NEW system
     const wallets = await getUserWallets(userId);
 
     if (wallets.length === 0) {
-      // No wallets found
       let message = `💼 *Wallet Settings*\n\n`;
       message += `❌ No wallet connected\n\n`;
       message += `You need to create a wallet first.\n\n`;
@@ -462,7 +537,6 @@ export async function showWalletSelection(
       return;
     }
 
-    // Get primary wallet
     const primaryWallet = wallets.find((w: any) => w.is_primary) || wallets[0];
 
     let message = `💼 *Active Wallet*\n\n`;
@@ -478,12 +552,10 @@ export async function showWalletSelection(
 
     const buttons: any[] = [];
 
-    // Simple proceed button
     buttons.push([
       Markup.button.callback("✅ Use This Wallet", `confirmwallet_${tokenAddress}`)
     ]);
 
-    // Manage wallets
     buttons.push([
       Markup.button.callback("👛 Manage Wallets", "menu_wallets")
     ]);
@@ -555,9 +627,21 @@ export async function showTokenSettings(ctx: Context, tokenAddress: string) {
 /**
  * Assesses token risk level
  */
-function assessTokenRisk(tokenInfo: any): string {
+function assessTokenRisk(tokenInfo: MergedTokenInfo): string {
   const marketCap = tokenInfo.marketCap || 0;
   const liquidity = tokenInfo.liquidity || 0;
+  const pooledSol = tokenInfo.pooledSol || 0;
+
+  // For pump.fun tokens, use pooled SOL as indicator
+  if (pooledSol > 0) {
+    if (pooledSol > 50) {
+      return "🟢 Low Risk";
+    } else if (pooledSol > 20) {
+      return "🟡 Medium Risk";
+    } else {
+      return "🔴 High Risk";
+    }
+  }
 
   if (marketCap > 10000000 && liquidity > 1000000) {
     return "🟢 Low Risk";

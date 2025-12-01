@@ -17,6 +17,8 @@ export interface ResolvedToken {
   bondingCurveProgress?: number;
   isGraduated?: boolean;
   raydiumPool?: string | null;
+  marketCap?: number;
+  pooledSol?: number;
 }
 
 const axiosConfig = {
@@ -268,11 +270,11 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                 const tokenMint = parsedInfo.mint;
                 console.log(`✅ Found token mint via token accounts: ${tokenMint}`);
                 
-                // Get token info from DexScreener
-                let tokenInfo = await getTokenInfoFromDexScreener(tokenMint);
+                // Get FULL token info from Pump.fun APIs
+                let tokenInfo = await getFullTokenInfo(tokenMint);
                 
                 if (tokenInfo) {
-                  console.log(`✅ Found token on DexScreener: ${tokenInfo.symbol}`);
+                  console.log(`✅ Got full token info: ${tokenInfo.symbol} - $${tokenInfo.price}`);
                   return {
                     tokenAddress: tokenMint,
                     pairAddress: address,
@@ -281,7 +283,10 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                     exchange: tokenInfo.exchange || "pump.fun",
                     liquidity: tokenInfo.liquidity,
                     price: tokenInfo.price,
-                    isGraduated: false,
+                    marketCap: tokenInfo.marketCap,
+                    bondingCurveProgress: tokenInfo.bondingCurveProgress,
+                    pooledSol: tokenInfo.pooledSol,
+                    isGraduated: tokenInfo.isGraduated || false,
                   };
                 }
                 
@@ -332,18 +337,20 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                     const tokenMint = balance.mint;
                     console.log(`✅ Found token mint from transaction: ${tokenMint}`);
                     
-                    let tokenInfo = await getTokenInfoFromDexScreener(tokenMint);
-                    const metadata = await getOnChainMetadata(connection, tokenMint);
+                    let tokenInfo = await getFullTokenInfo(tokenMint);
                     
                     return {
                       tokenAddress: tokenMint,
                       pairAddress: address,
-                      symbol: tokenInfo?.symbol || metadata?.symbol || "PUMP",
-                      name: tokenInfo?.name || metadata?.name || "Pump.fun Token",
+                      symbol: tokenInfo?.symbol || "PUMP",
+                      name: tokenInfo?.name || "Pump.fun Token",
                       exchange: tokenInfo?.exchange || "pump.fun",
                       liquidity: tokenInfo?.liquidity || 0,
                       price: tokenInfo?.price || 0,
-                      isGraduated: false,
+                      marketCap: tokenInfo?.marketCap,
+                      bondingCurveProgress: tokenInfo?.bondingCurveProgress,
+                      pooledSol: tokenInfo?.pooledSol,
+                      isGraduated: tokenInfo?.isGraduated || false,
                     };
                   }
                 }
@@ -364,18 +371,20 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                       if (derivedBC.toBase58() === address) {
                         console.log(`✅ Verified token mint: ${tokenMint}`);
                         
-                        let tokenInfo = await getTokenInfoFromDexScreener(tokenMint);
-                        const metadata = await getOnChainMetadata(connection, tokenMint);
+                        let tokenInfo = await getFullTokenInfo(tokenMint);
                         
                         return {
                           tokenAddress: tokenMint,
                           pairAddress: address,
-                          symbol: tokenInfo?.symbol || metadata?.symbol || "PUMP",
-                          name: tokenInfo?.name || metadata?.name || "Pump.fun Token",
+                          symbol: tokenInfo?.symbol || "PUMP",
+                          name: tokenInfo?.name || "Pump.fun Token",
                           exchange: tokenInfo?.exchange || "pump.fun",
                           liquidity: tokenInfo?.liquidity || 0,
                           price: tokenInfo?.price || 0,
-                          isGraduated: false,
+                          marketCap: tokenInfo?.marketCap,
+                          bondingCurveProgress: tokenInfo?.bondingCurveProgress,
+                          pooledSol: tokenInfo?.pooledSol,
+                          isGraduated: tokenInfo?.isGraduated || false,
                         };
                       }
                     } catch {}
@@ -523,18 +532,85 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
 }
 
 /**
- * Helper: Get token info from DexScreener
+ * Helper: Get FULL token info - tries Pump.fun APIs first (for price/progress), then DexScreener
  */
-async function getTokenInfoFromDexScreener(tokenAddress: string): Promise<{
+async function getFullTokenInfo(tokenMint: string): Promise<{
   symbol: string;
   name: string;
   exchange: string;
   liquidity: number;
   price: number;
+  marketCap?: number;
+  bondingCurveProgress?: number;
+  pooledSol?: number;
+  isGraduated?: boolean;
 } | null> {
+  console.log(`📡 Getting full token info for mint: ${tokenMint}`);
+  
+  // Try Pump.fun APIs first - they have the best data for pump tokens
+  const pumpApis = [
+    { url: `https://client-api-2-74b1891ee9f9.herokuapp.com/coins/${tokenMint}`, name: 'herokuapp' },
+    { url: `https://pump-fun-api.vercel.app/api/coin/${tokenMint}`, name: 'vercel' },
+    { url: `https://frontend-api.pump.fun/coins/${tokenMint}`, name: 'pump.fun-frontend' },
+    { url: `https://api.pump.fun/coins/${tokenMint}`, name: 'pump.fun-api' },
+  ];
+  
+  for (const api of pumpApis) {
+    try {
+      console.log(`   📡 Trying ${api.name} for token info...`);
+      const response = await axios.get(api.url, {
+        timeout: 8000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+          'Origin': 'https://pump.fun',
+          'Referer': 'https://pump.fun/',
+        }
+      });
+      
+      if (response.data) {
+        const data = response.data;
+        console.log(`   ✅ ${api.name} returned data!`);
+        
+        // Calculate bonding curve progress
+        const virtualTokenReserves = data.virtual_token_reserves || 0;
+        const initialVirtualTokenReserves = 1073000000 * 1e6; // 1.073B tokens
+        const progress = ((initialVirtualTokenReserves - virtualTokenReserves) / (793100000 * 1e6)) * 100;
+        
+        // Calculate price from reserves
+        let price = data.price || 0;
+        if (!price && data.virtual_sol_reserves && data.virtual_token_reserves) {
+          price = (data.virtual_sol_reserves / 1e9) / (data.virtual_token_reserves / 1e6);
+        }
+        
+        // Get market cap
+        const marketCap = data.usd_market_cap || (price * 1e9); // 1B supply
+        
+        // Pooled SOL
+        const pooledSol = (data.real_sol_reserves || 0) / 1e9;
+        
+        return {
+          symbol: data.symbol || "PUMP",
+          name: data.name || "Pump.fun Token",
+          exchange: data.complete ? "pumpswap" : "pump.fun",
+          liquidity: pooledSol * 200, // Rough USD estimate (SOL price ~$200)
+          price: price,
+          marketCap: marketCap,
+          bondingCurveProgress: Math.min(100, Math.max(0, progress)),
+          pooledSol: pooledSol,
+          isGraduated: data.complete || false,
+        };
+      }
+    } catch (e: any) {
+      console.log(`   ❌ ${api.name} failed: ${e.response?.status || e.message}`);
+    }
+  }
+  
+  // Fallback to DexScreener
+  console.log(`   📡 Trying DexScreener...`);
   try {
     const response = await axios.get(
-      `${DEXSCREENER_API}/tokens/${tokenAddress}`,
+      `${DEXSCREENER_API}/tokens/${tokenMint}`,
       { ...axiosConfig, timeout: 5000 }
     );
     
@@ -546,17 +622,35 @@ async function getTokenInfoFromDexScreener(tokenAddress: string): Promise<{
         (a: any, b: any) => parseFloat(b.liquidity?.usd || "0") - parseFloat(a.liquidity?.usd || "0")
       )[0];
       
+      console.log(`   ✅ DexScreener found: ${pair.baseToken.symbol}`);
+      
       return {
         symbol: pair.baseToken.symbol,
         name: pair.baseToken.name || pair.baseToken.symbol,
         exchange: pair.dexId,
         liquidity: parseFloat(pair.liquidity?.usd || "0"),
         price: parseFloat(pair.priceUsd || "0"),
+        marketCap: parseFloat(pair.marketCap || pair.fdv || "0"),
       };
     }
-  } catch {}
+  } catch (e: any) {
+    console.log(`   ❌ DexScreener failed: ${e.message}`);
+  }
   
   return null;
+}
+
+/**
+ * Helper: Get token info from DexScreener only (legacy)
+ */
+async function getTokenInfoFromDexScreener(tokenAddress: string): Promise<{
+  symbol: string;
+  name: string;
+  exchange: string;
+  liquidity: number;
+  price: number;
+} | null> {
+  return getFullTokenInfo(tokenAddress);
 }
 
 /**

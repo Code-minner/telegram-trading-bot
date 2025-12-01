@@ -245,11 +245,14 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
         
         // =====================================================
         // Handle TOKEN MINT - derive bonding curve and get data
+        // Supports both regular SPL Token and Token-2022 (Token Extensions)
         // =====================================================
         const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
         
-        if (owner === TOKEN_PROGRAM) {
-          console.log(`🎯 Detected token mint! Deriving bonding curve...`);
+        if (owner === TOKEN_PROGRAM || owner === TOKEN_2022_PROGRAM) {
+          const tokenType = owner === TOKEN_2022_PROGRAM ? "Token-2022" : "SPL Token";
+          console.log(`🎯 Detected ${tokenType} mint! Deriving bonding curve...`);
           
           // This is a token mint - derive its bonding curve
           const [bondingCurve] = PublicKey.findProgramAddressSync(
@@ -425,6 +428,29 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                     
                     let tokenInfo = await getFullTokenInfo(tokenMint);
                     
+                    // If APIs failed, parse bonding curve data directly
+                    if (!tokenInfo || !tokenInfo.price) {
+                      console.log(`📊 APIs failed, parsing bonding curve data for transaction mint...`);
+                      const curveData = await parseBondingCurveData(connection, address);
+                      const metadata = await getOnChainMetadata(connection, tokenMint);
+                      
+                      if (curveData) {
+                        return {
+                          tokenAddress: tokenMint,
+                          pairAddress: address,
+                          symbol: metadata?.symbol || "PUMP",
+                          name: metadata?.name || "Pump.fun Token",
+                          exchange: curveData.complete ? "pumpswap" : "pump.fun",
+                          liquidity: curveData.pooledSol * 200,
+                          price: curveData.priceUsd,
+                          marketCap: curveData.marketCap,
+                          bondingCurveProgress: curveData.bondingCurveProgress,
+                          pooledSol: curveData.pooledSol,
+                          isGraduated: curveData.complete,
+                        };
+                      }
+                    }
+                    
                     return {
                       tokenAddress: tokenMint,
                       pairAddress: address,
@@ -458,6 +484,29 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                         console.log(`✅ Verified token mint: ${tokenMint}`);
                         
                         let tokenInfo = await getFullTokenInfo(tokenMint);
+                        
+                        // If APIs failed, parse bonding curve data directly
+                        if (!tokenInfo || !tokenInfo.price) {
+                          console.log(`📊 APIs failed, parsing bonding curve data for verified mint...`);
+                          const curveData = await parseBondingCurveData(connection, address);
+                          const metadata = await getOnChainMetadata(connection, tokenMint);
+                          
+                          if (curveData) {
+                            return {
+                              tokenAddress: tokenMint,
+                              pairAddress: address,
+                              symbol: metadata?.symbol || "PUMP",
+                              name: metadata?.name || "Pump.fun Token",
+                              exchange: curveData.complete ? "pumpswap" : "pump.fun",
+                              liquidity: curveData.pooledSol * 200,
+                              price: curveData.priceUsd,
+                              marketCap: curveData.marketCap,
+                              bondingCurveProgress: curveData.bondingCurveProgress,
+                              pooledSol: curveData.pooledSol,
+                              isGraduated: curveData.complete,
+                            };
+                          }
+                        }
                         
                         return {
                           tokenAddress: tokenMint,

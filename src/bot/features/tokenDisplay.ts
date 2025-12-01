@@ -235,6 +235,7 @@ export async function handleTokenAddressMessage(
 /**
  * Formats enhanced token information for display
  * ✅ NOW INCLUDES: Bonding curve progress, pooled SOL, proper market cap
+ * ✅ FIXED: Full copyable addresses
  */
 function formatEnhancedTokenDisplay(
   tokenInfo: MergedTokenInfo,
@@ -249,16 +250,10 @@ function formatEnhancedTokenDisplay(
     tokenInfo.symbol
   }\` - ${tokenInfo.exchange || "DEX"})\n\n`;
 
-  // Addresses
-  message += `⭐ *CA:* \`${tokenInfo.address.slice(
-    0,
-    8
-  )}...${tokenInfo.address.slice(-8)}\`\n`;
+  // Addresses - FULL and copyable
+  message += `⭐ *CA:* \`${tokenInfo.address}\`\n`;
   if (tokenInfo.pairAddress && tokenInfo.pairAddress !== tokenInfo.address) {
-    message += `🎁 *LP:* \`${tokenInfo.pairAddress.slice(
-      0,
-      8
-    )}...${tokenInfo.pairAddress.slice(-8)}\`\n\n`;
+    message += `🎁 *LP:* \`${tokenInfo.pairAddress}\`\n\n`;
   } else {
     message += `\n`;
   }

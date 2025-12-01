@@ -290,7 +290,30 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
                   };
                 }
                 
-                // Fallback to on-chain metadata
+                // APIs failed - parse bonding curve data directly!
+                console.log(`📊 APIs failed, parsing bonding curve data directly...`);
+                const curveData = await parseBondingCurveData(connection, address);
+                
+                if (curveData) {
+                  // Get token name from on-chain metadata
+                  const metadata = await getOnChainMetadata(connection, tokenMint);
+                  
+                  return {
+                    tokenAddress: tokenMint,
+                    pairAddress: address,
+                    symbol: metadata?.symbol || "PUMP",
+                    name: metadata?.name || "Pump.fun Token",
+                    exchange: curveData.complete ? "pumpswap" : "pump.fun",
+                    liquidity: curveData.pooledSol * 200, // Rough USD estimate
+                    price: curveData.priceUsd,
+                    marketCap: curveData.marketCap,
+                    bondingCurveProgress: curveData.bondingCurveProgress,
+                    pooledSol: curveData.pooledSol,
+                    isGraduated: curveData.complete,
+                  };
+                }
+                
+                // Final fallback to on-chain metadata only
                 const metadata = await getOnChainMetadata(connection, tokenMint);
                 
                 return {
@@ -532,6 +555,98 @@ export async function resolveTokenAddress(input: string): Promise<ResolvedToken 
 }
 
 /**
+ * Helper: Parse bonding curve data directly to get reserves and calculate price/progress
+ * This works even when all APIs are down!
+ */
+async function parseBondingCurveData(connection: any, bondingCurveAddress: string): Promise<{
+  virtualTokenReserves: number;
+  virtualSolReserves: number;
+  realTokenReserves: number;
+  realSolReserves: number;
+  tokenTotalSupply: number;
+  complete: boolean;
+  price: number;
+  priceUsd: number;
+  bondingCurveProgress: number;
+  pooledSol: number;
+  marketCap: number;
+} | null> {
+  try {
+    const { PublicKey } = await import("@solana/web3.js");
+    const accountInfo = await connection.getAccountInfo(new PublicKey(bondingCurveAddress));
+    
+    if (!accountInfo || accountInfo.data.length < 49) {
+      return null;
+    }
+    
+    const data = accountInfo.data;
+    
+    // Pump.fun bonding curve layout:
+    // Offset 0-7: Discriminator (8 bytes)
+    // Offset 8-15: virtualTokenReserves (u64)
+    // Offset 16-23: virtualSolReserves (u64)
+    // Offset 24-31: realTokenReserves (u64)
+    // Offset 32-39: realSolReserves (u64)
+    // Offset 40-47: tokenTotalSupply (u64)
+    // Offset 48: complete (bool)
+    
+    const virtualTokenReserves = Number(data.readBigUInt64LE(8));
+    const virtualSolReserves = Number(data.readBigUInt64LE(16));
+    const realTokenReserves = Number(data.readBigUInt64LE(24));
+    const realSolReserves = Number(data.readBigUInt64LE(32));
+    const tokenTotalSupply = Number(data.readBigUInt64LE(40));
+    const complete = data[48] === 1;
+    
+    // Calculate price in SOL (virtualSolReserves / virtualTokenReserves)
+    // Token has 6 decimals, SOL has 9 decimals
+    const price = (virtualSolReserves / 1e9) / (virtualTokenReserves / 1e6);
+    
+    // Get SOL price for USD calculation (rough estimate, could fetch from API)
+    const solPrice = 200; // You can replace with actual SOL price fetch
+    const priceUsd = price * solPrice;
+    
+    // Calculate bonding curve progress
+    // Initial real token reserves = 793,100,000 * 1e6
+    const initialRealTokenReserves = 793100000 * 1e6;
+    const tokensRemaining = realTokenReserves;
+    const tokensSold = initialRealTokenReserves - tokensRemaining;
+    const bondingCurveProgress = (tokensSold / initialRealTokenReserves) * 100;
+    
+    // Pooled SOL (real SOL in the curve)
+    const pooledSol = realSolReserves / 1e9;
+    
+    // Market cap = price * total supply (1 billion tokens)
+    const marketCap = priceUsd * 1e9;
+    
+    console.log(`📊 Parsed bonding curve data:`);
+    console.log(`   Virtual Token Reserves: ${(virtualTokenReserves / 1e6).toLocaleString()}`);
+    console.log(`   Virtual SOL Reserves: ${(virtualSolReserves / 1e9).toFixed(4)} SOL`);
+    console.log(`   Real Token Reserves: ${(realTokenReserves / 1e6).toLocaleString()}`);
+    console.log(`   Real SOL Reserves: ${(realSolReserves / 1e9).toFixed(4)} SOL`);
+    console.log(`   Price: ${price.toFixed(12)} SOL ($${priceUsd.toFixed(8)})`);
+    console.log(`   Progress: ${bondingCurveProgress.toFixed(2)}%`);
+    console.log(`   Complete: ${complete}`);
+    
+    return {
+      virtualTokenReserves,
+      virtualSolReserves,
+      realTokenReserves,
+      realSolReserves,
+      tokenTotalSupply,
+      complete,
+      price,
+      priceUsd,
+      bondingCurveProgress: Math.min(100, Math.max(0, bondingCurveProgress)),
+      pooledSol,
+      marketCap,
+    };
+  } catch (e: any) {
+    console.log(`⚠️ Failed to parse bonding curve data: ${e.message}`);
+    return null;
+  }
+}
+
+/**
  * Helper: Get FULL token info - tries Pump.fun APIs first (for price/progress), then DexScreener
  */
 async function getFullTokenInfo(tokenMint: string): Promise<{
@@ -637,6 +752,28 @@ async function getFullTokenInfo(tokenMint: string): Promise<{
     console.log(`   ❌ DexScreener failed: ${e.message}`);
   }
   
+  // Try Jupiter token list for name/symbol
+  console.log(`   📡 Trying Jupiter token list...`);
+  try {
+    const response = await axios.get(
+      `https://tokens.jup.ag/token/${tokenMint}`,
+      { timeout: 5000 }
+    );
+    
+    if (response.data) {
+      console.log(`   ✅ Jupiter found: ${response.data.symbol}`);
+      return {
+        symbol: response.data.symbol || "PUMP",
+        name: response.data.name || "Pump.fun Token",
+        exchange: "pump.fun",
+        liquidity: 0,
+        price: 0,
+      };
+    }
+  } catch (e: any) {
+    console.log(`   ❌ Jupiter failed: ${e.message}`);
+  }
+  
   return null;
 }
 
@@ -654,7 +791,7 @@ async function getTokenInfoFromDexScreener(tokenAddress: string): Promise<{
 }
 
 /**
- * Helper: Get on-chain token metadata
+ * Helper: Get on-chain token metadata (name/symbol)
  */
 async function getOnChainMetadata(connection: any, tokenMint: string): Promise<{
   symbol: string;
@@ -678,29 +815,57 @@ async function getOnChainMetadata(connection: any, tokenMint: string): Promise<{
     
     const metadataInfo = await connection.getAccountInfo(metadataPDA);
     
-    if (metadataInfo) {
-      // Parse metadata - simplified parsing for name and symbol
+    if (metadataInfo && metadataInfo.data) {
       const data = metadataInfo.data;
       
-      // Metadata layout (simplified):
-      // Skip first 1 + 32 + 32 = 65 bytes
-      // Then: name_length (4), name, symbol_length (4), symbol
+      // Metaplex metadata has a specific layout
+      // We need to find name and symbol in the data
+      // The layout starts with a key (1 byte), then update_authority (32 bytes), 
+      // mint (32 bytes), then name data
       
-      let offset = 65 + 1 + 32; // key + update_authority + mint
-      
-      // Name
-      const nameLen = data.readUInt32LE(offset);
-      offset += 4;
-      const name = data.slice(offset, offset + nameLen).toString('utf8').replace(/\0/g, '').trim();
-      offset += nameLen;
-      
-      // Symbol
-      const symbolLen = data.readUInt32LE(offset);
-      offset += 4;
-      const symbol = data.slice(offset, offset + symbolLen).toString('utf8').replace(/\0/g, '').trim();
-      
-      if (name || symbol) {
-        return { name: name || "Unknown", symbol: symbol || "???" };
+      try {
+        // Skip: key (1) + update_authority (32) + mint (32) = 65 bytes
+        let offset = 65;
+        
+        // Ensure we have enough data
+        if (data.length < offset + 36) {
+          console.log(`ℹ️ Metadata too short: ${data.length} bytes`);
+          return null;
+        }
+        
+        // Name: 4 bytes length prefix + up to 32 bytes of data
+        const nameLen = Math.min(data.readUInt32LE(offset), 32);
+        offset += 4;
+        
+        if (offset + nameLen > data.length) {
+          return null;
+        }
+        
+        const nameBytes = data.slice(offset, offset + nameLen);
+        const name = nameBytes.toString('utf8').replace(/\0/g, '').trim();
+        offset += 32; // Fixed 32 byte field
+        
+        // Symbol: 4 bytes length prefix + up to 10 bytes of data
+        if (offset + 4 > data.length) {
+          return { name: name || "Unknown", symbol: "???" };
+        }
+        
+        const symbolLen = Math.min(data.readUInt32LE(offset), 10);
+        offset += 4;
+        
+        if (offset + symbolLen > data.length) {
+          return { name: name || "Unknown", symbol: "???" };
+        }
+        
+        const symbolBytes = data.slice(offset, offset + symbolLen);
+        const symbol = symbolBytes.toString('utf8').replace(/\0/g, '').trim();
+        
+        if (name || symbol) {
+          console.log(`✅ Got on-chain metadata: ${name} (${symbol})`);
+          return { name: name || "Unknown", symbol: symbol || "???" };
+        }
+      } catch (parseError: any) {
+        console.log(`⚠️ Metadata parse error: ${parseError.message}`);
       }
     }
   } catch (e: any) {

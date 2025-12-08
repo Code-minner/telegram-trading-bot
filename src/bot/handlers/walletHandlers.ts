@@ -1,4 +1,4 @@
-// bot/handlers/walletHandlers.ts - FIXED WALLET IMPORT
+// bot/handlers/walletHandlers.ts - FIXED WALLET IMPORT WITH SAFE ERROR HANDLING
 import { Context, Markup } from "telegraf";
 import * as userService from "../../services/userService";
 
@@ -31,6 +31,31 @@ async function safeEditMessage(ctx: Context, text: string, extra?: any) {
       await ctx.reply(text, extra);
     } catch (replyError) {
       console.error("[WALLET] Reply also failed:", replyError);
+    }
+  }
+}
+
+/**
+ * Safely send a message - handles Markdown parse errors
+ */
+async function safeSendMessage(ctx: Context, text: string, extra?: any) {
+  try {
+    await ctx.reply(text, extra);
+  } catch (error: any) {
+    // If Markdown parsing fails, try without Markdown
+    if (error.message?.includes("parse entities") || error.message?.includes("Can't find end")) {
+      console.log("[WALLET] Markdown parse failed, retrying without Markdown");
+      try {
+        const plainExtra = { ...extra };
+        delete plainExtra.parse_mode;
+        // Remove asterisks and backticks for plain text
+        const plainText = text.replace(/\*/g, '').replace(/`/g, '');
+        await ctx.reply(plainText, plainExtra);
+      } catch (retryError) {
+        console.error("[WALLET] Plain text reply also failed:", retryError);
+      }
+    } else {
+      console.error("[WALLET] Send message failed:", error.message);
     }
   }
 }
@@ -203,8 +228,19 @@ export async function handleWalletTextInput(
     }
   } catch (error: any) {
     console.error("Wallet text input error:", error);
-    await ctx.reply(`❌ Error: ${error.message}`);
+    
+    // Clear state
     walletStates.delete(userId);
+    
+    // Send error without Markdown to avoid parse issues
+    try {
+      await ctx.reply(
+        `❌ Error processing wallet.\n\nPlease try again.`,
+        { reply_markup: { remove_keyboard: true } }
+      );
+    } catch (e) {
+      console.error("[WALLET] Could not send error message");
+    }
   }
 
   return false;
@@ -360,6 +396,34 @@ async function processWalletImport(
 
     const publicKey = keypair.publicKey.toString();
 
+    // Check if wallet already exists BEFORE setting state
+    if (walletService) {
+      try {
+        const existingWallets = await walletService.getUserWallets(userId);
+        const alreadyExists = existingWallets.some(
+          (w: any) => w.public_key === publicKey
+        );
+        
+        if (alreadyExists) {
+          walletStates.delete(userId);
+          await ctx.reply(
+            `⚠️ *Wallet Already Imported!*\n\n` +
+            `This wallet is already in your list.\n\n` +
+            `Use /wallet to view your wallets.`,
+            {
+              parse_mode: "Markdown",
+              ...Markup.inlineKeyboard([
+                [Markup.button.callback("💼 View Wallets", "menu_wallets")],
+              ]),
+            }
+          );
+          return;
+        }
+      } catch (e) {
+        // Continue if check fails
+      }
+    }
+
     // Set state to name the wallet
     walletStates.set(userId, {
       action: "name_wallet",
@@ -405,7 +469,7 @@ async function processWalletImport(
 }
 
 /**
- * Process wallet name
+ * Process wallet name - FIXED WITH SAFE ERROR HANDLING
  */
 async function processWalletName(
   ctx: Context,
@@ -415,7 +479,7 @@ async function processWalletName(
 ) {
   console.log(`[WALLET] Processing name for user ${userId}: ${name}`);
 
-  await ctx.reply("⏳ *Saving wallet...*", { parse_mode: "Markdown" });
+  await ctx.reply("⏳ Saving wallet...");
 
   try {
     // Validate name first
@@ -477,18 +541,56 @@ async function processWalletName(
     // Clear state even on error
     walletStates.delete(userId);
 
-    await ctx.reply(
-      `❌ *Failed to Save*\n\n` +
-        `Error: ${error.message}\n\n` +
-        `Please try again or contact support.`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔄 Retry Import", "wallet_import")],
-          [Markup.button.callback("« Back", "menu_wallets")],
-        ]),
+    // Check for duplicate wallet error
+    const isDuplicate = 
+      error.message?.includes('duplicate key') || 
+      error.message?.includes('unique constraint') ||
+      error.message?.includes('already exists');
+
+    if (isDuplicate) {
+      // Handle duplicate - NO Markdown to avoid parse errors
+      try {
+        await ctx.reply(
+          `⚠️ Wallet Already Exists!\n\n` +
+          `This wallet has already been imported.\n` +
+          `Use /wallet to view your wallets.`,
+          {
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback("💼 View Wallets", "menu_wallets")],
+              [Markup.button.callback("🏠 Main Menu", "back_main")],
+            ]),
+          }
+        );
+      } catch (sendError) {
+        console.error("[WALLET] Failed to send duplicate error:", sendError);
+        try {
+          await ctx.reply("⚠️ This wallet already exists. Use /wallet to view.");
+        } catch (e) {}
       }
-    );
+      return;
+    }
+
+    // Generic error - NO Markdown to avoid parse errors with underscores
+    try {
+      await ctx.reply(
+        `❌ Failed to save wallet.\n\n` +
+        `Please try again or contact support.`,
+        {
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback("🔄 Retry Import", "wallet_import")],
+            [Markup.button.callback("« Back", "menu_wallets")],
+          ]),
+        }
+      );
+    } catch (sendError) {
+      console.error("[WALLET] Failed to send error message:", sendError);
+      // Last resort - plain text
+      try {
+        await ctx.reply("❌ Failed to save wallet. Please try again.");
+      } catch (e) {
+        console.error("[WALLET] Could not send any error message");
+      }
+    }
   }
 }
 
